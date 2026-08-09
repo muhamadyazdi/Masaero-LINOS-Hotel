@@ -1440,6 +1440,98 @@ test("hotel setup: amend room types, catalogue, and standards matrix", () => {
   assert.equal(updated.quantity, Number(target.quantity || 0) + 1);
 });
 
+test("hotel setup: exception rooms and linen demand rollup", () => {
+  const { service } = setup();
+  const superadmin = { email: "muhamadyazdi@gmail.com", sub: "local:muhamadyazdi@gmail.com" };
+  const headers = (propertyId) => ({ "x-linos-property-id": propertyId });
+
+  const created = service.handle(
+    superadmin,
+    "POST",
+    "/setup/property",
+    { name: "Demand View Inn", code: "DVI", timezone: "Asia/Kuala_Lumpur", property_scale: "standard" }
+  );
+  const propertyId = created.property.id;
+  const q = { propertyId };
+
+  service.handle(superadmin, "POST", "/setup/room-types", { use_starters: true }, q, headers(propertyId));
+  service.handle(superadmin, "POST", "/setup/beds", { use_starters: true }, q, headers(propertyId));
+  service.handle(superadmin, "POST", "/setup/linen-items", { use_starters: true }, q, headers(propertyId));
+  service.handle(
+    superadmin,
+    "POST",
+    "/setup/standards",
+    { use_defaults: true, replace: true },
+    q,
+    headers(propertyId)
+  );
+
+  let state = service.handle(superadmin, "GET", "/setup/state", {}, q, headers(propertyId));
+  const categoryId = state.roomCategories[0].id;
+  const bedId = state.bedConfigs[0].id;
+  const linenId = state.linenItems[0].id;
+
+  service.handle(
+    superadmin,
+    "POST",
+    "/setup/rooms/bulk",
+    {
+      floor_from: 2,
+      floor_to: 2,
+      rooms_per_floor: 3,
+      default_category_id: categoryId,
+      default_bed_config_id: bedId
+    },
+    q,
+    headers(propertyId)
+  );
+
+  state = service.handle(superadmin, "GET", "/setup/state", {}, q, headers(propertyId));
+  assert.ok((state.linenDemand || []).length > 0);
+  assert.ok(state.linenDemandTotal > 0);
+  assert.equal(state.exceptionRoomCount, 0);
+  const roomId = state.rooms.find((r) => r.is_active)?.id;
+  assert.ok(roomId);
+
+  const fitted = service.handle(
+    superadmin,
+    "GET",
+    `/setup/rooms/${roomId}/fitted`,
+    {},
+    q,
+    headers(propertyId)
+  );
+  assert.ok((fitted.lines || []).length > 0);
+  const baseQty = Number(fitted.lines.find((l) => l.linen_item_id === linenId)?.quantity || 0);
+
+  const exceptioned = service.handle(
+    superadmin,
+    "POST",
+    `/setup/rooms/${roomId}/fitted`,
+    {
+      lines: fitted.lines.map((line) => ({
+        linen_item_id: line.linen_item_id,
+        quantity: line.linen_item_id === linenId ? baseQty + 2 : line.quantity,
+        included: Number(line.linen_item_id === linenId ? baseQty + 2 : line.quantity) > 0
+      }))
+    },
+    q,
+    headers(propertyId)
+  );
+  assert.equal(exceptioned.exceptionRoomCount, 1);
+  assert.ok(exceptioned.rooms.find((r) => r.id === roomId)?.has_linen_exception);
+
+  const reset = service.handle(
+    superadmin,
+    "POST",
+    `/setup/rooms/${roomId}/fitted`,
+    { reset_to_standard: true },
+    q,
+    headers(propertyId)
+  );
+  assert.equal(reset.exceptionRoomCount, 0);
+});
+
 test("phase 2 room-to-store collection is piece-counted and role enforced", () => {
   const { service, supervisor, agent1, store } = setup();
   const porter = { email: "porter@linos.hotel", sub: "local:porter@linos.hotel" };

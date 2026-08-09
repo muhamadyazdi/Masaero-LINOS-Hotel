@@ -3071,16 +3071,72 @@ export class HotelService {
     const activeRooms = rooms.filter((r) => r.is_active);
     const catById = new Map(categories.map((c) => [c.id, c]));
     const bedById = new Map(beds.map((b) => [b.id, b]));
-    const roomRows = rooms.map((r) => ({
-      id: r.id,
-      room_number: r.room_number,
-      floor_number: r.floor_number,
-      category_id: r.category_id,
-      bed_config_id: r.bed_config_id,
-      category_name: catById.get(r.category_id)?.name || "—",
-      bed_name: bedById.get(r.bed_config_id)?.name || "—",
-      is_active: r.is_active !== false
-    }));
+    const overrides = this.store.list("room_linen_requirements", (r) => r.property_id === pid);
+    const overrideRoomIds = new Set(overrides.map((r) => r.room_id));
+    const roomRows = rooms.map((r) => {
+      const active = r.is_active !== false;
+      const required = active ? this.requiredLinenForRoom(r) : [];
+      return {
+        id: r.id,
+        room_number: r.room_number,
+        floor_number: r.floor_number,
+        category_id: r.category_id,
+        bed_config_id: r.bed_config_id,
+        category_name: catById.get(r.category_id)?.name || "—",
+        bed_name: bedById.get(r.bed_config_id)?.name || "—",
+        is_active: active,
+        has_linen_exception: overrideRoomIds.has(r.id),
+        required_pieces: required.reduce((sum, line) => sum + Number(line.quantity || 0), 0)
+      };
+    });
+    const linenDemandMap = new Map();
+    for (const room of activeRooms) {
+      for (const line of this.requiredLinenForRoom(room)) {
+        const prev = linenDemandMap.get(line.linen_item_id) || {
+          linen_item_id: line.linen_item_id,
+          code: line.code,
+          name: line.name,
+          unit: line.unit || "piece",
+          sort_order: line.sort_order ?? 100,
+          total_quantity: 0,
+          room_count: 0
+        };
+        prev.total_quantity += Number(line.quantity || 0);
+        prev.room_count += 1;
+        linenDemandMap.set(line.linen_item_id, prev);
+      }
+    }
+    const linenDemand = [...linenDemandMap.values()].sort(
+      (a, b) => (a.sort_order ?? 100) - (b.sort_order ?? 100) || a.name.localeCompare(b.name)
+    );
+    const typeSummaries = categories.map((cat) => {
+      const roomCount = activeRooms.filter((r) => r.category_id === cat.id).length;
+      const bedsForType = beds
+        .map((bed) => {
+          const lines = standards.filter(
+            (row) =>
+              row.category_id === cat.id &&
+              row.bed_config_id === bed.id &&
+              Number(row.quantity || 0) > 0
+          );
+          return {
+            bed_config_id: bed.id,
+            bed_name: bed.name,
+            item_count: lines.length,
+            piece_count: lines.reduce((sum, row) => sum + Number(row.quantity || 0), 0),
+            configured: lines.length > 0
+          };
+        })
+        .filter((row) => row.configured || beds.length <= 2);
+      return {
+        category_id: cat.id,
+        code: cat.code,
+        name: cat.name,
+        room_count: roomCount,
+        beds: bedsForType,
+        configured: bedsForType.some((b) => b.configured)
+      };
+    });
     const stores = this.store.list("stores", (s) => s.property_id === pid && s.is_active);
     const laundry = this.store.list("laundry_providers", (p) => p.property_id === pid).map((row) => ({
       ...row,
@@ -3105,8 +3161,13 @@ export class HotelService {
       bedConfigs: beds,
       linenItems,
       roomLinenStandards: standards,
+      roomLinenRequirements: overrides,
       rooms: roomRows,
       roomsCount: activeRooms.length,
+      exceptionRoomCount: roomRows.filter((r) => r.is_active && r.has_linen_exception).length,
+      typeSummaries,
+      linenDemand,
+      linenDemandTotal: linenDemand.reduce((sum, row) => sum + Number(row.total_quantity || 0), 0),
       floors: [...new Set(activeRooms.map((r) => r.floor_number))].sort((a, b) => a - b),
       stores,
       laundryProviders: laundry,
@@ -3921,6 +3982,85 @@ export class HotelService {
     return this.updateSetupRoom(identity, propertyId, roomId, { is_active: false }, idempotencyKey);
   }
 
+  getSetupRoomFitted(identity, propertyId, roomId) {
+    const access = this.requireSuperadmin(identity, propertyId);
+    const room = this.store.find(
+      "rooms",
+      (r) => r.id === roomId && r.property_id === access.property.id && r.is_active !== false
+    );
+    if (!room) throw new LinosError(404, "ERR-SETUP-041", "Room not found.");
+    const category = this.store.find("room_categories", (c) => c.id === room.category_id);
+    const bed = this.store.find("bed_configs", (b) => b.id === room.bed_config_id);
+    return {
+      ok: true,
+      room: {
+        id: room.id,
+        room_number: room.room_number,
+        floor_number: room.floor_number,
+        category_id: room.category_id,
+        bed_config_id: room.bed_config_id,
+        category_name: category?.name || "—",
+        bed_name: bed?.name || "—"
+      },
+      lines: this.catalogueLinenForRoom(room)
+    };
+  }
+
+  saveSetupRoomFitted(identity, propertyId, roomId, body = {}, idempotencyKey = "") {
+    const access = this.requireSuperadmin(identity, propertyId || body.property_id);
+    return this.withIdempotency(idempotencyKey, access, () => {
+      const pid = access.property.id;
+      const room = this.store.find("rooms", (r) => r.id === roomId && r.property_id === pid);
+      if (!room) throw new LinosError(404, "ERR-SETUP-041", "Room not found.");
+      const lines = Array.isArray(body.lines) ? body.lines : [];
+      const resetToStandard = body.reset_to_standard === true;
+      if (!resetToStandard && !lines.length) {
+        throw new LinosError(400, "ERR-SETUP-042", "Provide fitted linen lines.");
+      }
+
+      if (resetToStandard) {
+        this.store.remove("room_linen_requirements", (r) => r.room_id === room.id);
+      } else {
+        const catalogue = this.catalogueLinenForRoom(room);
+        const byItem = new Map(catalogue.map((line) => [line.linen_item_id, line]));
+        for (const row of lines) {
+          const linenItemId = row.linen_item_id;
+          if (!linenItemId || !byItem.has(linenItemId)) continue;
+          const quantity = Number(row.quantity || 0);
+          if (!Number.isFinite(quantity) || quantity < 0) continue;
+          const included = row.included !== undefined ? Boolean(row.included) : quantity > 0;
+          const standard = byItem.get(linenItemId);
+          const matchesStandard =
+            included === (Number(standard.standard_quantity || 0) > 0) &&
+            Number(quantity) === Number(standard.standard_quantity || 0);
+          if (matchesStandard) {
+            this.store.remove(
+              "room_linen_requirements",
+              (r) => r.room_id === room.id && r.linen_item_id === linenItemId
+            );
+            continue;
+          }
+          this.upsertRoomLinenRequirement(
+            access,
+            { room_id: room.id, linen_item_id: linenItemId },
+            { included, quantity: included ? quantity : 0 }
+          );
+        }
+      }
+
+      this.audit(access, "setup.room.fitted", "room", room.id, {
+        reset_to_standard: resetToStandard,
+        lines: lines.length
+      });
+      return {
+        ok: true,
+        room_id: room.id,
+        lines: this.catalogueLinenForRoom(room),
+        ...this.getSetupState(identity, pid)
+      };
+    });
+  }
+
   getSetupLinenMatrix(identity, propertyId, query = {}) {
     const access = this.requireSuperadmin(identity, propertyId);
     const pid = access.property.id;
@@ -3981,6 +4121,12 @@ export class HotelService {
     }
     if (method === "DELETE" && path.startsWith("/setup/rooms/")) {
       return this.deactivateSetupRoom(identity, propertyId, path.split("/")[3], idem);
+    }
+    if (method === "GET" && path.startsWith("/setup/rooms/") && path.endsWith("/fitted")) {
+      return this.getSetupRoomFitted(identity, propertyId, path.split("/")[3]);
+    }
+    if (method === "POST" && path.startsWith("/setup/rooms/") && path.endsWith("/fitted")) {
+      return this.saveSetupRoomFitted(identity, propertyId, path.split("/")[3], body, idem);
     }
     if (method === "GET" && path === "/setup/linen-matrix") {
       return this.getSetupLinenMatrix(identity, propertyId, query);
