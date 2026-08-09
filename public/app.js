@@ -39,7 +39,9 @@ const state = {
   setupProperties: [],
   setupBulkPreview: null,
   setupForceCreate: false,
-  authMode: "register",
+  authMode: "login",
+  authBusy: false,
+  dashboardLoading: false,
   assignParams: {
     rooms_per_housekeeper: null,
     prefer_default_floors: true,
@@ -361,7 +363,12 @@ async function api(path, { method = "GET", body, query } = {}) {
     headers,
     body: body ? JSON.stringify(body) : undefined
   });
-  const data = await res.json();
+  let data;
+  try {
+    data = await res.json();
+  } catch {
+    throw new Error(`Request failed (${res.status}). Please try again.`);
+  }
   if (!res.ok || data.ok === false) {
     throw new Error(data.error?.message || `Request failed (${res.status})`);
   }
@@ -373,6 +380,16 @@ async function login(email, password = "") {
   state.token = data.token;
   localStorage.setItem("linos_hotel_token", state.token);
   await bootstrap();
+}
+
+async function refreshDashboard({ soft = false } = {}) {
+  if (!state.token) return;
+  if (!soft) state.dashboardLoading = true;
+  try {
+    state.dashboard = (await api("/dashboard")).dashboard;
+  } finally {
+    if (!soft) state.dashboardLoading = false;
+  }
 }
 
 async function registerTrial(body) {
@@ -394,7 +411,7 @@ async function bootstrap() {
   state.session = data.session;
   state.master = data.master;
   state.round = data.todayRound;
-  state.dashboard = data.dashboard;
+  state.dashboard = data.dashboard || null;
   if (data.session?.property?.id) {
     state.activePropertyId = data.session.property.id;
     localStorage.setItem("linos_hotel_property_id", state.activePropertyId);
@@ -414,6 +431,14 @@ async function bootstrap() {
     await loadMyTasks();
   }
   render();
+  if (!state.dashboard && !isHousekeeperMode()) {
+    try {
+      await refreshDashboard();
+      if (state.view === "dashboard") render();
+    } catch (err) {
+      toast(err.message, true);
+    }
+  }
 }
 
 async function loadSetupState() {
@@ -487,7 +512,7 @@ function renderLogin() {
         <h1>Masaero LINOS Hotel</h1>
         <p class="lede">Simple room linen operations for independent hotels, small resorts, and hosted properties.</p>
         <div class="auth-tabs" role="tablist" aria-label="Account access">
-          <button type="button" class="auth-tab ${register ? "active" : ""}" id="auth-register-tab">Start free trial</button>
+          <button type="button" class="auth-tab ${register ? "active" : ""}" id="auth-register-tab">Start Free Version</button>
           <button type="button" class="auth-tab ${register ? "" : "active"}" id="auth-login-tab">Sign in</button>
         </div>
         ${
@@ -497,47 +522,71 @@ function renderLogin() {
                 <label>Work email <input name="email" type="email" autocomplete="email" required placeholder="alex@yourhotel.com" /></label>
                 <label>Hotel or property name <input name="hotel_name" required placeholder="Harbour View Hotel" /></label>
                 <label>Password <input name="password" type="password" minlength="8" autocomplete="new-password" required placeholder="At least 8 characters" /></label>
-                <button class="btn" type="submit">Create free trial</button>
-                <p class="form-hint">Start with a 14-day free trial. You can configure rooms, linen, and staff after signing in.</p>
+                <label>Re-enter password <input name="password_confirmation" type="password" minlength="8" autocomplete="new-password" required placeholder="Type the password again" /></label>
+                <button class="btn" type="submit">Create Free Version</button>
+                <p class="form-hint">Create your free workspace, then configure rooms, linen, and staff after signing in.</p>
               </form>`
             : `<form id="login-form" class="stack">
-                <label>Work email <input name="email" type="email" autocomplete="email" required placeholder="you@yourhotel.com" /></label>
-                <label>Password <input name="password" type="password" autocomplete="current-password" placeholder="Your password" /></label>
-                <button class="btn" type="submit">Sign in</button>
+                <label>Work email <input name="email" type="email" autocomplete="email" required placeholder="you@yourhotel.com" value="muhamadyazdi@gmail.com" /></label>
+                <label>Password <input name="password" type="password" autocomplete="current-password" placeholder="Leave blank for demo accounts" /></label>
+                <button class="btn" type="submit" ${state.authBusy ? "disabled" : ""}>${
+                  state.authBusy ? "Signing in…" : "Sign in"
+                }</button>
+                <p class="form-hint">Demo superadmin: muhamadyazdi@gmail.com (password optional).</p>
               </form>`
         }
       </div>
     </div>
   `;
   $("#auth-register-tab")?.addEventListener("click", () => {
+    if (state.authBusy) return;
     state.authMode = "register";
     renderLogin();
   });
   $("#auth-login-tab")?.addEventListener("click", () => {
+    if (state.authBusy) return;
     state.authMode = "login";
     renderLogin();
   });
   $("#trial-form")?.addEventListener("submit", async (e) => {
     e.preventDefault();
+    const btn = e.target.querySelector('button[type="submit"]');
+    state.authBusy = true;
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "Creating Free Version…";
+    }
     try {
       const fd = new FormData(e.target);
       await registerTrial({
         display_name: String(fd.get("display_name") || "").trim(),
         email: String(fd.get("email") || "").trim(),
         hotel_name: String(fd.get("hotel_name") || "").trim(),
-        password: String(fd.get("password") || "")
+        password: String(fd.get("password") || ""),
+        password_confirmation: String(fd.get("password_confirmation") || "")
       });
     } catch (err) {
       toast(err.message, true);
+      state.authBusy = false;
+      renderLogin();
     }
   });
   $("#login-form")?.addEventListener("submit", async (e) => {
     e.preventDefault();
+    const btn = e.target.querySelector('button[type="submit"]');
+    state.authBusy = true;
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "Signing in…";
+    }
     try {
       const fd = new FormData(e.target);
       await login(String(fd.get("email") || "").trim(), String(fd.get("password") || ""));
+      state.authBusy = false;
     } catch (err) {
       toast(err.message, true);
+      state.authBusy = false;
+      renderLogin();
     }
   });
 }
@@ -698,11 +747,15 @@ function renderDashboard() {
     null;
   const floors = [...new Set((snap.rooms || []).map((r) => r.floor_number))].sort((a, b) => b - a);
   const summary = snap.summary || {};
+  const loadingNote = state.dashboardLoading || !state.dashboard
+    ? `<p class="lede">Loading room linen snapshot…</p>`
+    : "";
 
   return `
     <section class="panel">
       <h2>Operations dashboard</h2>
       <p class="lede">Today’s room progress, verification pressure, and exception register.</p>
+      ${loadingNote}
       ${propertyDisclaimer()}
       <div class="grid-3" style="margin-top:1rem">
         <div class="stat"><strong>${d.progress.total || 0}</strong><span>Rooms on round</span></div>
@@ -853,11 +906,10 @@ function renderSnapshotDetail(room) {
 
 function propertyDisclaimer() {
   const p = state.session?.property;
-  if (!p?.trial_ends_at || p.subscription_plan !== "free_trial") return "";
+  if (p?.subscription_plan !== "free") return "";
   return `
-    <div class="trial-banner">
-      <strong>Free trial</strong> · ${p.trial_days_remaining ?? ""} day(s) remaining.
-      Configure your property and invite your operations team from Hotel setup.
+    <div class="plan-banner">
+      <strong>Free Version</strong> · Configure your property and invite your operations team from Hotel setup.
     </div>
   `;
 }
@@ -2259,13 +2311,8 @@ function startDashboardPoll() {
       return;
     }
     try {
-      state.dashboard = (await api("/dashboard")).dashboard;
-      if (state.view === "dashboard") {
-        const app = $("#app");
-        if (!app) return;
-        // Soft refresh snapshot panel only when still on dashboard
-        render();
-      }
+      await refreshDashboard({ soft: true });
+      if (state.view === "dashboard") render();
     } catch {
       /* ignore poll errors */
     }
@@ -3263,10 +3310,25 @@ function bindEvents() {
     render();
   });
   document.querySelectorAll("[data-snapshot-room]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      state.selectedSnapshotRoomId = btn.getAttribute("data-snapshot-room") || "";
+    btn.addEventListener("click", async () => {
+      const roomId = btn.getAttribute("data-snapshot-room") || "";
+      state.selectedSnapshotRoomId = roomId;
       render();
       $("#snapshot-detail-focus")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      if (!roomId || !state.dashboard?.roomLinenSnapshot) return;
+      const existing = (state.dashboard.roomLinenSnapshot.rooms || []).find((r) => r.room_id === roomId);
+      if (existing?.lines?.length) return;
+      try {
+        const detail = await api("/dashboard/room-linen", { query: { roomId } });
+        const rooms = state.dashboard.roomLinenSnapshot.rooms || [];
+        const idx = rooms.findIndex((r) => r.room_id === roomId);
+        if (idx >= 0) rooms[idx] = { ...rooms[idx], ...detail.room };
+        else rooms.push(detail.room);
+        state.dashboard.roomLinenSnapshot.rooms = rooms;
+        if (state.selectedSnapshotRoomId === roomId && state.view === "dashboard") render();
+      } catch (err) {
+        toast(err.message, true);
+      }
     });
   });
 

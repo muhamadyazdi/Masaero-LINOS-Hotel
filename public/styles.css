@@ -446,7 +446,7 @@ th { color: var(--muted); font-weight: 600; font-size: 0.82rem; text-transform: 
   color: var(--muted);
   font-size: 0.88rem;
 }
-.trial-banner {
+.plan-banner {
   padding: 0.75rem 0.9rem;
   border-radius: 12px;
   background: #eef8f2;

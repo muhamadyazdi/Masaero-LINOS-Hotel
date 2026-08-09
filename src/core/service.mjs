@@ -238,7 +238,7 @@ export class HotelService {
       allow_guest_pii_import: property.allow_guest_pii_import,
       photo_retention_days: property.photo_retention_days,
       location_model: property.location_model || "hotel_room_store_laundry",
-      subscription_plan: property.subscription_plan || "free_trial",
+      subscription_plan: property.subscription_plan || "free",
       subscription_status: property.subscription_status || "active",
       trial_started_at: property.trial_started_at || null,
       trial_ends_at: trialEndsAt,
@@ -267,12 +267,14 @@ export class HotelService {
     const displayName = String(body.display_name || body.name || "").trim();
     const hotelName = String(body.hotel_name || body.hotelName || "").trim();
     const password = String(body.password || "");
+    const passwordConfirmation = String(body.password_confirmation || body.passwordConfirm || "");
     if (!/^\S+@\S+\.\S+$/.test(email)) throw new LinosError(400, "ERR-TRIAL-001", "Enter a valid work email.");
     if (displayName.length < 2) throw new LinosError(400, "ERR-TRIAL-002", "Enter your name.");
     if (hotelName.length < 2) throw new LinosError(400, "ERR-TRIAL-003", "Enter your hotel or property name.");
     if (password.length < 8) throw new LinosError(400, "ERR-TRIAL-004", "Use a password of at least 8 characters.");
+    if (password !== passwordConfirmation) throw new LinosError(400, "ERR-TRIAL-005", "The passwords do not match.");
     if (this.store.find("users", (u) => u.email === email && u.is_active)) {
-      throw new LinosError(409, "ERR-TRIAL-005", "An account already exists for that email.");
+      throw new LinosError(409, "ERR-TRIAL-006", "An account already exists for that email.");
     }
 
     const baseCode = slugCode(hotelName, "HOTEL");
@@ -282,8 +284,6 @@ export class HotelService {
       code = `${baseCode.slice(0, 20)}-${suffix}`;
       suffix += 1;
     }
-    const now = nowIso();
-    const trialEndsAt = new Date(Date.now() + 14 * 86400000).toISOString();
     const property = this.store.insert("properties", {
       id: newId("prop"),
       code,
@@ -297,10 +297,10 @@ export class HotelService {
       allow_guest_pii_import: false,
       photo_retention_days: 365,
       location_model: "hotel_room_store_laundry",
-      subscription_plan: "free_trial",
-      subscription_status: "trialing",
-      trial_started_at: now,
-      trial_ends_at: trialEndsAt
+      subscription_plan: "free",
+      subscription_status: "active",
+      trial_started_at: null,
+      trial_ends_at: null
     });
     const user = this.store.insert("users", {
       id: newId("user"),
@@ -370,17 +370,17 @@ export class HotelService {
     insertStarterRules(this.store, property.id);
     this.audit(
       { property, user },
-      "account.trial_started",
+      "account.free_version_started",
       "property",
       property.id,
-      { owner_email: email, trial_days: 14, store_id: starterStore.id }
+      { owner_email: email, plan: "free", store_id: starterStore.id }
     );
     return {
       ok: true,
       token: `local:${email}`,
       session: this.session({ email, sub: `local:${email}`, source: "trial-registration" }, property.id),
       property: this.publicProperty(property),
-      trial: { status: "trialing", ends_at: trialEndsAt, days: 14 }
+      plan: { name: "Free Version", status: "active" }
     };
   }
 
@@ -425,7 +425,8 @@ export class HotelService {
       session: this.session(identity, propertyId),
       master: this.masterData(access),
       todayRound: this.getRoundForDate(access, todayDateString(access.property.timezone)),
-      dashboard: this.dashboard(access)
+      // Dashboard (esp. room linen snapshot) is large; load it after first paint via /dashboard.
+      dashboard: null
     };
   }
 
@@ -2413,10 +2414,10 @@ export class HotelService {
     };
   }
 
-  buildRoomLinenSnapshot(access, roundTasks = null) {
+  buildRoomLinenSnapshot(access, roundTasks = null, { includeLineDetails = false, roomId = "" } = {}) {
     const pid = access.property.id;
     const rooms = this.store
-      .list("rooms", (r) => r.property_id === pid && r.is_active)
+      .list("rooms", (r) => r.property_id === pid && r.is_active && (!roomId || r.id === roomId))
       .sort((a, b) => a.floor_number - b.floor_number || a.room_number.localeCompare(b.room_number));
     const installed = this.store.list(
       "stock_balances",
@@ -2517,8 +2518,10 @@ export class HotelService {
         extra_piece_total: extraPieceTotal,
         fitted_piece_total: fitted.reduce((s, f) => s + Number(f.quantity || 0), 0),
         installed_piece_total: lines.reduce((s, l) => s + Number(l.installed_qty || 0), 0),
-        lines,
-        recent_extras: (extrasByRoom.get(room.id) || []).slice(0, 12)
+        // Line detail is only needed for the selected-room panel; omit from grid payloads.
+        lines: includeLineDetails || roomId ? lines : [],
+        recent_extras:
+          includeLineDetails || roomId ? (extrasByRoom.get(room.id) || []).slice(0, 12) : []
       };
     });
 
@@ -2527,6 +2530,24 @@ export class HotelService {
       summary,
       rooms: snapshotRooms
     };
+  }
+
+  getRoomLinenSnapshotRoom(identity, propertyId, roomId) {
+    const access = this.resolveAccess(identity, propertyId);
+    const allowed =
+      hasCapability(access.capabilities, "dashboard.supervisor") ||
+      hasCapability(access.capabilities, "dashboard.agent") ||
+      hasCapability(access.capabilities, "dashboard.management") ||
+      hasCapability(access.capabilities, "dashboard.store") ||
+      hasCapability(access.capabilities, "dashboard.porter");
+    if (!allowed) throw new LinosError(403, "ERR-AUTHZ-001", "Missing capability: dashboard");
+    if (!roomId) throw new LinosError(400, "ERR-DASH-001", "roomId is required.");
+    const round = this.getRoundForDate(access, todayDateString(access.property.timezone));
+    const tasks = round ? this.listTasks(round.id) : [];
+    const snap = this.buildRoomLinenSnapshot(access, tasks, { includeLineDetails: true, roomId });
+    const room = snap.rooms[0] || null;
+    if (!room) throw new LinosError(404, "ERR-DASH-002", "Room not found in linen snapshot.");
+    return { ok: true, room, asOf: snap.asOf };
   }
 
   collectionLineView(line) {
@@ -3602,6 +3623,9 @@ export class HotelService {
       return { ok: true, master: this.masterData(access) };
     }
     if (method === "GET" && path === "/dashboard") return this.getDashboard(identity, propertyId);
+    if (method === "GET" && path === "/dashboard/room-linen") {
+      return this.getRoomLinenSnapshotRoom(identity, propertyId, query.roomId || "");
+    }
     if (method === "GET" && path === "/rounds/today") {
       const access = this.resolveAccess(identity, propertyId);
       const round = this.getRoundForDate(access, todayDateString(access.property.timezone), query.shift || "AM");

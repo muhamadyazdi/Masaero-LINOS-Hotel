@@ -599,7 +599,10 @@ test("dashboard roomLinenSnapshot has status rules", () => {
   assert.ok(dash.roomLinenSnapshot.summary.normal > 0);
   const sample = dash.roomLinenSnapshot.rooms.find((r) => r.status === "normal");
   assert.ok(sample);
-  assert.ok(sample.lines.every((l) => l.item_status !== "short"));
+  assert.equal(sample.short_item_count, 0);
+  const detail = service.getRoomLinenSnapshotRoom(supervisor, "", sample.room_id);
+  assert.ok(detail.room.lines.length > 0);
+  assert.ok(detail.room.lines.every((l) => l.item_status !== "short"));
 });
 
 test("morning board: ~80% occupied on board, vacant excluded, uniqueness", () => {
@@ -994,23 +997,35 @@ test("hotel setup: supervisor cannot access setup APIs", () => {
   );
 });
 
-test("free trial registration creates a commercial hotel workspace", () => {
+test("free version registration creates a commercial hotel workspace", () => {
   const store = createMemoryStore();
   const service = new HotelService(store);
   const result = service.createTrialAccount({
     display_name: "Alex Tan",
     email: "alex@harbourview.example",
     hotel_name: "Harbour View Hotel",
-    password: "secure-pass-123"
+    password: "secure-pass-123",
+    password_confirmation: "secure-pass-123"
   });
   assert.equal(result.ok, true);
   assert.equal(result.property.name, "Harbour View Hotel");
   assert.equal(result.property.is_demo, false);
-  assert.equal(result.property.subscription_plan, "free_trial");
-  assert.equal(result.trial.days, 14);
+  assert.equal(result.property.subscription_plan, "free");
+  assert.equal(result.plan.name, "Free Version");
   assert.equal(store.raw.users.length, 1);
   assert.equal(store.raw.room_categories.length, 4);
   assert.equal(store.raw.rooms.length, 0);
+  assert.throws(
+    () =>
+      service.createTrialAccount({
+        display_name: "Mismatch User",
+        email: "mismatch@harbourview.example",
+        hotel_name: "Mismatch Hotel",
+        password: "secure-pass-123",
+        password_confirmation: "different-pass-123"
+      }),
+    /passwords do not match/i
+  );
 });
 
 test("authenticated users can submit product feedback", () => {
