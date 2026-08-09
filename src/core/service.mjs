@@ -261,7 +261,9 @@ export class HotelService {
       property_kind: propertyKind,
       property_scale: propertyScale,
       features,
-      space_label: spaceLabel(propertyKind)
+      space_label: spaceLabel(propertyKind),
+      setup_confirmed: Boolean(property.setup_confirmed_at),
+      setup_confirmed_at: property.setup_confirmed_at || null
     };
   }
 
@@ -3271,6 +3273,9 @@ export class HotelService {
       } else if (patch.property_scale || patch.property_kind) {
         // Keep explicit features when scale/kind change unless defaults requested.
         patch.features_json = normalizeFeatures(this.propertyFeatures(current), nextScale, nextKind);
+      }
+      if (body.setup_confirmed === true || body.confirm_setup === true) {
+        patch.setup_confirmed_at = nowIso();
       }
       if (patch.name === "") throw new LinosError(400, "ERR-SETUP-001", "Property name is required.");
       const property = this.store.update("properties", access.property.id, patch);

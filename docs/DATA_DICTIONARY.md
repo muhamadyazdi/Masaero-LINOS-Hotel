@@ -6,7 +6,7 @@ Timestamps are stored in UTC and displayed in `Asia/Kuala_Lumpur` unless a prope
 
 | Entity | Purpose | Key fields |
 |---|---|---|
-| `properties` | Hotel/workspace | `code`, `name`, `is_demo`, `allow_guest_pii_import`, `photo_retention_days`, `demo_staff_profile`, `subscription_plan`, `subscription_status`, `trial_*`, `property_kind`, `property_scale`, `features_json` |
+| `properties` | Hotel/workspace | `code`, `name`, `is_demo`, `allow_guest_pii_import`, `photo_retention_days`, `demo_staff_profile`, `subscription_plan`, `subscription_status`, `trial_*`, `property_kind`, `property_scale`, `features_json`, `setup_confirmed_at` |
 | `rooms` | Guest room **and** clean replenishment stock point | `room_number`, `floor_number`, `category_id`, `bed_config_id` |
 | `stores` | Hotel linen store (custody party) | `code`, `name` |
 | `laundry_providers` | Laundry custody party | turnaround hours, `partner_type` (`in_house`/`aerosparkle`/`other`; legacy `none`/`manual` aliased), `external_ref`, `config_json` |

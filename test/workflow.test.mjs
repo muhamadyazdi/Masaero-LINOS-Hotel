@@ -5,7 +5,6 @@ import { HotelService } from "../src/core/service.mjs";
 import {
   parseCsv,
   assertNoGuestPiiHeaders,
-  DEFAULT_ROOMS_PER_AGENT,
   roleLabel,
   ROLES
 } from "../src/core/model.mjs";
@@ -1152,6 +1151,31 @@ test("small spa free version can go live with simple rooms and owner-only ops", 
   });
   assert.match(brief.brief.summary, /Terata Spa/);
   assert.equal(brief.brief.partner_type, "aerosparkle");
+});
+
+test("setup confirmation is recorded on the property", () => {
+  const store = createMemoryStore();
+  const service = new HotelService(store);
+  const trial = service.createTrialAccount({
+    display_name: "Confirm Owner",
+    email: "confirm@harbour.example",
+    hotel_name: "Harbour Confirm",
+    password: "secure-pass-123",
+    password_confirmation: "secure-pass-123"
+  });
+  assert.equal(trial.property.setup_confirmed, false);
+  const identity = { email: "confirm@harbour.example", sub: "local:confirm@harbour.example" };
+  const propertyId = trial.property.id;
+  const confirmed = service.handle(
+    identity,
+    "PATCH",
+    "/setup/property",
+    { setup_confirmed: true },
+    { propertyId },
+    { "x-linos-property-id": propertyId }
+  );
+  assert.equal(confirmed.property.setup_confirmed, true);
+  assert.ok(confirmed.property.setup_confirmed_at);
 });
 
 test("scale packs can unlock team and custody features", () => {

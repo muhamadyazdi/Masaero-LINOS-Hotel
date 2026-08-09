@@ -66,6 +66,7 @@ docs/                       Data dictionary, Phase 0, hospital migration
 - **Laundry Operations** on `laundry_providers.partner_type`: `in_house` | `aerosparkle` | `other` (legacy `none`→`in_house`, `manual`→`other`). AeroSparkle connect is optional.
 - **Assignment:** even split across housekeepers (or owner when none); each HK fills their default floor first, then spills. No minimum-rooms-per-HK rule. Supervisor can amend after auto-assign.
 - Hotel setup rooms step lists saved rooms with amend/remove, and requires confirming linen qty per room type before create.
+- Setup shows plain-language step pop-up guides and a final **confirm overall setup** step (`setup_confirmed_at`) before go-live; users can amend later. Info-icon tips explain Morning board and other ops terms.
 - Incomplete Superadmins land on Hotel setup (first failing readiness step) after login; ready properties land on Dashboard.
 - **Admin** (`admin.configure`): day-to-day room grid, fitted linen, default floors, and **Grow this property** pack toggles. Supervisors use Admin after setup.
 - `/setup/properties` is scoped: Free Version Superadmins see only their own hotel. Platform operators (`LINOS_BOOTSTRAP_ADMIN_EMAILS`) can list all properties.
