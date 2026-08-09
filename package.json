@@ -1,0 +1,23 @@
+{
+  "name": "linos-hotel",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "LINOS Hotel — room linen operations, piece-level accountability, and laundry reconciliation",
+  "scripts": {
+    "dev": "node scripts/portable-server.mjs",
+    "check": "node --check netlify/functions/api.mjs && node --check scripts/portable-server.mjs && node --check src/core/service.mjs && node --check src/core/repository.mjs && node --check src/core/model.mjs && node --check src/adapters/postgres.mjs && node --check src/adapters/memory.mjs",
+    "test": "node --test test/**/*.test.mjs",
+    "db:migrate": "node scripts/migrate.mjs",
+    "seed:demo": "node scripts/seed-demo.mjs"
+  },
+  "dependencies": {
+    "postgres": "^3.4.7"
+  },
+  "devDependencies": {
+    "@netlify/functions": "^4.2.5"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
