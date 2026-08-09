@@ -44,13 +44,13 @@ test("role labels never say Station", () => {
   assert.ok(!roleLabel("Station Agent").includes("Station"));
 });
 
-test("demo seed creates Seri Pacific hotel-native topology", () => {
+test("starter workspace creates hotel-native topology", () => {
   const { service } = setup();
   const session = service.session({ email: "supervisor@linos.hotel" }, "");
-  assert.equal(session.property.is_demo, true);
+  assert.equal(session.property.is_demo, false);
   assert.equal(session.property.location_model, "hotel_room_store_laundry");
-  assert.match(session.property.demo_disclaimer, /synthetic|approximate|demo/i);
-  assert.match(session.property.positioning, /Jalan Putra|WTCKL|KLIA/i);
+  assert.equal(session.property.demo_disclaimer, "Masaero LINOS Hotel starter workspace.");
+  assert.match(session.property.positioning, /Masaero LINOS Hotel/i);
   assert.equal(session.user.role_label, "Supervisor");
 
   const master = service.masterData(service.resolveAccess({ email: "supervisor@linos.hotel" }, ""));
@@ -992,6 +992,36 @@ test("hotel setup: supervisor cannot access setup APIs", () => {
     () => service.handle(supervisor, "POST", "/setup/property", { name: "Nope Hotel" }),
     (err) => err.status === 403
   );
+});
+
+test("free trial registration creates a commercial hotel workspace", () => {
+  const store = createMemoryStore();
+  const service = new HotelService(store);
+  const result = service.createTrialAccount({
+    display_name: "Alex Tan",
+    email: "alex@harbourview.example",
+    hotel_name: "Harbour View Hotel",
+    password: "secure-pass-123"
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.property.name, "Harbour View Hotel");
+  assert.equal(result.property.is_demo, false);
+  assert.equal(result.property.subscription_plan, "free_trial");
+  assert.equal(result.trial.days, 14);
+  assert.equal(store.raw.users.length, 1);
+  assert.equal(store.raw.room_categories.length, 4);
+  assert.equal(store.raw.rooms.length, 0);
+});
+
+test("authenticated users can submit product feedback", () => {
+  const { service } = setup();
+  const result = service.submitFeedback(
+    { email: "supervisor@linos.hotel" },
+    { category: "Usability", message: "Remember the supervisor's selected floor." }
+  );
+  assert.equal(result.ok, true);
+  assert.equal(result.feedback.category, "Usability");
+  assert.equal(result.feedback.status, "received");
 });
 
 test("hotel setup: superadmin creates hotel through readiness and morning board", () => {

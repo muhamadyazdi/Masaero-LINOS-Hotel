@@ -7,13 +7,11 @@ import {
   sumStandardPieces
 } from "./model.mjs";
 
-export const DEMO_DISCLAIMER =
-  "Synthetic demonstration configuration inspired by publicly described Seri Pacific Hotel positioning. Room counts, floor stacking, linen standards, and stock quantities are approximate demo data only and must not be treated as official hotel inventory.";
+export const DEMO_DISCLAIMER = "Masaero LINOS Hotel starter workspace.";
 
-export const PROPERTY_POSITIONING =
-  "5★ business hotel at Jalan Putra, Kuala Lumpur. Linked to WTCKL and Sunway Putra Mall; near Putra / LRT; about 15 minutes to KL Sentral; about 60 minutes to KLIA. Demo property profile only.";
+export const PROPERTY_POSITIONING = "Hotel linen operations workspace powered by Masaero LINOS Hotel.";
 
-/** Approximate Seri Pacific demo mix — totals 561 rooms. */
+/** Starter workspace room mix — totals 561 rooms. */
 export const DEMO_ROOM_PLAN = Object.freeze({
   total: 561,
   families: {
@@ -349,7 +347,7 @@ export function ensureInstalledInRoomBalances(store, propertyId) {
 }
 
 export function seedDemoProperty(store, { bootstrapEmail = "muhamadyazdi@gmail.com" } = {}) {
-  const existing = store.find("properties", (p) => p.code === "SP-DEMO");
+  const existing = store.find("properties", (p) => ["MASAERO-LINOS", "SP-DEMO"].includes(p.code));
   if (existing) {
     if (hotelLocationModelOk(store, existing.id)) {
       ensureDemoStaffRoster(store, existing.id, { bootstrapEmail });
@@ -363,10 +361,10 @@ export function seedDemoProperty(store, { bootstrapEmail = "muhamadyazdi@gmail.c
   const propertyId = newId("prop");
   store.insert("properties", {
     id: propertyId,
-    code: "SP-DEMO",
-    name: "Seri Pacific Hotel Demo (Synthetic)",
+    code: "MASAERO-LINOS",
+    name: "Masaero LINOS Hotel",
     timezone: "Asia/Kuala_Lumpur",
-    is_demo: true,
+    is_demo: false,
     demo_disclaimer: DEMO_DISCLAIMER,
     positioning: PROPERTY_POSITIONING,
     star_rating: 5,
@@ -389,7 +387,7 @@ export function seedDemoProperty(store, { bootstrapEmail = "muhamadyazdi@gmail.c
     id: newId("lp"),
     property_id: propertyId,
     code: "MAIN",
-    name: "Demo Laundry Partner",
+    name: "Laundry Partner",
     standard_turnaround_hours: 24,
     express_turnaround_hours: 8,
     is_active: true
@@ -398,9 +396,9 @@ export function seedDemoProperty(store, { bootstrapEmail = "muhamadyazdi@gmail.c
   // Future-capable amenity / non-room locations (not Phase 1 room-linen workflow)
   const amenityStubs = [
     ["CLUB-LOUNGE", "Club Lounge", "club_lounge", 30, true],
-    ["FB-1", "Restaurant / Lounge / Café (demo stub)", "fb", null, false],
-    ["FB-2", "Second F&B outlet (demo stub)", "fb", null, false],
-    ["FB-3", "Café (demo stub)", "fb", null, false],
+    ["FB-1", "Restaurant / Lounge / Café", "fb", null, false],
+    ["FB-2", "Second F&B outlet", "fb", null, false],
+    ["FB-3", "Café", "fb", null, false],
     ["SPA", "Teratak Spa", "spa", null, false],
     ["POOL", "Outdoor & kids pool", "pool", null, false],
     ["GYM", "Gym", "gym", null, false],
@@ -466,7 +464,7 @@ export function seedDemoProperty(store, { bootstrapEmail = "muhamadyazdi@gmail.c
     ["BM", "Bath Mat", 80],
     ["BR", "Bathrobe", 90],
     ["SL", "Slippers (pair)", 100],
-    // Soft furnishings (demo approximate — curtains mandatory)
+    // Soft furnishings included in the starter catalogue.
     ["CUR", "Curtains (set)", 110],
     ["SHR", "Sheer Curtains (set)", 120],
     ["BLK", "Blackout Curtains (set)", 130],
@@ -620,8 +618,8 @@ export function seedDemoProperty(store, { bootstrapEmail = "muhamadyazdi@gmail.c
         const suiteNames =
           block.family === "Presidential"
             ? n === 1
-              ? "Seri Indah (demo)"
-              : "Seri Layang (demo)"
+              ? "Seri Indah"
+              : "Seri Layang"
             : null;
         const room = store.insert("rooms", {
           id: newId("room"),
@@ -632,7 +630,7 @@ export function seedDemoProperty(store, { bootstrapEmail = "muhamadyazdi@gmail.c
           bed_config_id: bed.id,
           is_active: true,
           special_notes: suiteNames || (n === 1 ? "Near lift — quieter service if possible" : null),
-          amenities_notes: "Daily housekeeping (demo). Bathrobes/slippers for Club/Suite/Presidential standards."
+          amenities_notes: "Daily housekeeping. Bathrobes/slippers for Club/Suite/Presidential standards."
         });
         createdRooms.push(room);
         familyCounts[block.family] = (familyCounts[block.family] || 0) + 1;

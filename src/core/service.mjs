@@ -1,3 +1,4 @@
+import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import { LinosError } from "./errors.mjs";
 import {
   DEFAULT_ROOMS_PER_AGENT,
@@ -44,9 +45,25 @@ export class HotelService {
   }
 
   ensureDemo() {
+    if (this.store.list("properties", () => true).length) return { ok: true, existing: true };
     return seedDemoProperty(this.store, {
       bootstrapEmail: process.env.LINOS_BOOTSTRAP_ADMIN_EMAILS?.split(",")[0]?.trim() || "muhamadyazdi@gmail.com"
     });
+  }
+
+  hashPassword(password) {
+    const salt = randomBytes(16).toString("hex");
+    const digest = scryptSync(String(password), salt, 32).toString("hex");
+    return `${salt}:${digest}`;
+  }
+
+  passwordMatches(password, encoded) {
+    if (!encoded) return true;
+    const [salt, expected] = String(encoded).split(":");
+    if (!salt || !expected) return false;
+    const actual = scryptSync(String(password || ""), salt, 32);
+    const expectedBytes = Buffer.from(expected, "hex");
+    return actual.length === expectedBytes.length && timingSafeEqual(actual, expectedBytes);
   }
 
   resolveAccess(identity, propertyId = "") {
@@ -204,6 +221,10 @@ export class HotelService {
   }
 
   publicProperty(property) {
+    const trialEndsAt = property.trial_ends_at || null;
+    const trialDaysRemaining = trialEndsAt
+      ? Math.max(0, Math.ceil((new Date(trialEndsAt).getTime() - Date.now()) / 86400000))
+      : null;
     return {
       id: property.id,
       code: property.code,
@@ -216,8 +237,171 @@ export class HotelService {
       address_line: property.address_line || null,
       allow_guest_pii_import: property.allow_guest_pii_import,
       photo_retention_days: property.photo_retention_days,
-      location_model: property.location_model || "hotel_room_store_laundry"
+      location_model: property.location_model || "hotel_room_store_laundry",
+      subscription_plan: property.subscription_plan || "free_trial",
+      subscription_status: property.subscription_status || "active",
+      trial_started_at: property.trial_started_at || null,
+      trial_ends_at: trialEndsAt,
+      trial_days_remaining: trialDaysRemaining
     };
+  }
+
+  authenticateLocal(email, password = "") {
+    this.ensureDemo();
+    const normalizedEmail = String(email || "").trim().toLowerCase();
+    if (!normalizedEmail) throw new LinosError(400, "ERR-AUTH-010", "Email is required.");
+    const user = this.store.find("users", (u) => u.email === normalizedEmail && u.is_active);
+    if (!user) throw new LinosError(401, "ERR-AUTH-011", "No account was found for that email.");
+    if (!this.passwordMatches(password, user.password_hash)) {
+      throw new LinosError(401, "ERR-AUTH-012", "The email or password is incorrect.");
+    }
+    return {
+      ok: true,
+      token: `local:${normalizedEmail}`,
+      session: this.session({ email: normalizedEmail, sub: `local:${normalizedEmail}`, source: "local-login" }, user.property_id || "")
+    };
+  }
+
+  createTrialAccount(body = {}) {
+    const email = String(body.email || "").trim().toLowerCase();
+    const displayName = String(body.display_name || body.name || "").trim();
+    const hotelName = String(body.hotel_name || body.hotelName || "").trim();
+    const password = String(body.password || "");
+    if (!/^\S+@\S+\.\S+$/.test(email)) throw new LinosError(400, "ERR-TRIAL-001", "Enter a valid work email.");
+    if (displayName.length < 2) throw new LinosError(400, "ERR-TRIAL-002", "Enter your name.");
+    if (hotelName.length < 2) throw new LinosError(400, "ERR-TRIAL-003", "Enter your hotel or property name.");
+    if (password.length < 8) throw new LinosError(400, "ERR-TRIAL-004", "Use a password of at least 8 characters.");
+    if (this.store.find("users", (u) => u.email === email && u.is_active)) {
+      throw new LinosError(409, "ERR-TRIAL-005", "An account already exists for that email.");
+    }
+
+    const baseCode = slugCode(hotelName, "HOTEL");
+    let code = baseCode;
+    let suffix = 2;
+    while (this.store.find("properties", (p) => p.code === code)) {
+      code = `${baseCode.slice(0, 20)}-${suffix}`;
+      suffix += 1;
+    }
+    const now = nowIso();
+    const trialEndsAt = new Date(Date.now() + 14 * 86400000).toISOString();
+    const property = this.store.insert("properties", {
+      id: newId("prop"),
+      code,
+      name: hotelName,
+      timezone: String(body.timezone || "Asia/Kuala_Lumpur").trim() || "Asia/Kuala_Lumpur",
+      is_demo: false,
+      demo_disclaimer: null,
+      positioning: String(body.positioning || "Independent hotel linen operations workspace").trim(),
+      star_rating: body.star_rating != null && body.star_rating !== "" ? Number(body.star_rating) : null,
+      address_line: String(body.address_line || "").trim() || null,
+      allow_guest_pii_import: false,
+      photo_retention_days: 365,
+      location_model: "hotel_room_store_laundry",
+      subscription_plan: "free_trial",
+      subscription_status: "trialing",
+      trial_started_at: now,
+      trial_ends_at: trialEndsAt
+    });
+    const user = this.store.insert("users", {
+      id: newId("user"),
+      property_id: property.id,
+      email,
+      display_name: displayName,
+      role_name: ROLES.SUPERADMIN,
+      is_active: true,
+      is_admin: true,
+      is_superadmin: true,
+      password_hash: this.hashPassword(password),
+      staff_band: null,
+      hk_number: null
+    });
+    const starterStore = this.store.insert("stores", {
+      id: newId("str"),
+      property_id: property.id,
+      code: "MAIN",
+      name: "Main Linen Store",
+      is_active: true
+    });
+    this.store.insert("laundry_providers", {
+      id: newId("lp"),
+      property_id: property.id,
+      code: "MAIN",
+      name: "Laundry Partner",
+      standard_turnaround_hours: 24,
+      express_turnaround_hours: 8,
+      is_active: true
+    });
+    const categories = SETUP_STARTER_ROOM_TYPES.map((row) =>
+      this.store.insert("room_categories", {
+        id: newId("cat"),
+        property_id: property.id,
+        code: row.code,
+        name: row.name,
+        family: row.family
+      })
+    );
+    const beds = SETUP_STARTER_BEDS.map((row) =>
+      this.store.insert("bed_configs", {
+        id: newId("bed"),
+        property_id: property.id,
+        code: row.code,
+        name: row.name
+      })
+    );
+    const linenItems = SETUP_STARTER_LINEN.map((row) =>
+      this.store.insert("linen_items", {
+        id: newId("lin"),
+        property_id: property.id,
+        code: row.code,
+        name: row.name,
+        unit: "piece",
+        sort_order: row.sort_order,
+        is_active: true
+      })
+    );
+    for (const standard of buildDefaultStandardsMatrix(categories, beds, linenItems)) {
+      this.store.insert("room_linen_standards", {
+        id: newId("rls"),
+        property_id: property.id,
+        ...standard
+      });
+    }
+    insertStarterExceptions(this.store, property.id);
+    insertStarterRules(this.store, property.id);
+    this.audit(
+      { property, user },
+      "account.trial_started",
+      "property",
+      property.id,
+      { owner_email: email, trial_days: 14, store_id: starterStore.id }
+    );
+    return {
+      ok: true,
+      token: `local:${email}`,
+      session: this.session({ email, sub: `local:${email}`, source: "trial-registration" }, property.id),
+      property: this.publicProperty(property),
+      trial: { status: "trialing", ends_at: trialEndsAt, days: 14 }
+    };
+  }
+
+  submitFeedback(identity, body = {}) {
+    const access = this.resolveAccess(identity, body.property_id || "");
+    const message = String(body.message || "").trim();
+    if (message.length < 10) throw new LinosError(400, "ERR-FEEDBACK-001", "Please enter at least 10 characters.");
+    if (message.length > 5000) throw new LinosError(400, "ERR-FEEDBACK-002", "Feedback must be 5,000 characters or less.");
+    const feedback = this.store.insert("feedback", {
+      id: newId("fb"),
+      property_id: access.property.id,
+      user_id: access.user.id,
+      user_email: access.user.email,
+      category: String(body.category || "General").trim().slice(0, 80),
+      message,
+      created_at: nowIso(),
+      status: "received",
+      linear_issue_id: null,
+      linear_issue_url: null
+    });
+    return { ok: true, feedback };
   }
 
   session(identity, propertyId) {
@@ -325,10 +509,13 @@ export class HotelService {
     const roomsDetailed = rooms.map((room) => {
       const category = categories.find((c) => c.id === room.category_id);
       const bed = beds.find((b) => b.id === room.bed_config_id);
+      const required_linen = this.requiredLinenForRoom(room);
       return {
         ...room,
         category,
-        bed_config: bed
+        bed_config: bed,
+        required_linen,
+        required_pieces: required_linen.reduce((sum, line) => sum + line.quantity, 0)
       };
     });
 

@@ -39,6 +39,7 @@ const state = {
   setupProperties: [],
   setupBulkPreview: null,
   setupForceCreate: false,
+  authMode: "register",
   assignParams: {
     rooms_per_housekeeper: null,
     prefer_default_floors: true,
@@ -97,16 +98,6 @@ function catalogueForRoom(room) {
       };
     });
 }
-
-const DEMO_USERS = [
-  { email: "muhamadyazdi@gmail.com", label: "Platform Superadmin" },
-  { email: "supervisor@linos.hotel", label: "Supervisor A (Lead)" },
-  { email: "supervisor2@linos.hotel", label: "Supervisor B" },
-  { email: "agent1@linos.hotel", label: "Housekeeper 01" },
-  { email: "agent2@linos.hotel", label: "Housekeeper 02" },
-  { email: "porter@linos.hotel", label: "Porter" },
-  { email: "store@linos.hotel", label: "Store Agent" }
-];
 
 const SETUP_STEPS = [
   { id: 1, key: "profile", label: "Hotel profile" },
@@ -377,11 +368,23 @@ async function api(path, { method = "GET", body, query } = {}) {
   return data;
 }
 
-async function login(email) {
-  const data = await api("/auth/local", { method: "POST", body: { email } });
+async function login(email, password = "") {
+  const data = await api("/auth/local", { method: "POST", body: { email, password } });
   state.token = data.token;
   localStorage.setItem("linos_hotel_token", state.token);
   await bootstrap();
+}
+
+async function registerTrial(body) {
+  const data = await api("/auth/register", { method: "POST", body });
+  state.token = data.token;
+  localStorage.setItem("linos_hotel_token", state.token);
+  state.activePropertyId = data.session?.property?.id || data.property?.id || "";
+  if (state.activePropertyId) localStorage.setItem("linos_hotel_property_id", state.activePropertyId);
+  await bootstrap();
+  state.view = "hotel-setup";
+  await loadSetupState();
+  render();
 }
 
 async function bootstrap() {
@@ -476,29 +479,63 @@ function itemName(id) {
 }
 
 function renderLogin() {
+  const register = state.authMode !== "login";
   $("#app").innerHTML = `
     <div class="login-wrap">
       <div class="login-card">
-        <h1>LINOS Hotel</h1>
-        <p class="lede">Room linen rounds, piece-level accountability, and supervisor verification.</p>
-        <form id="login-form" class="stack">
-          <label>Demo user
-            <select name="email">
-              ${DEMO_USERS.map((u) => `<option value="${u.email}">${u.label} — ${u.email}</option>`).join("")}
-            </select>
-          </label>
-          <button class="btn" type="submit">Sign in</button>
-        </form>
-        <div class="demo-note">
-          Local demo sign-in uses seeded property users. Seri Pacific room data is synthetic and approximate only.
+        <p class="eyebrow">Masaero</p>
+        <h1>Masaero LINOS Hotel</h1>
+        <p class="lede">Simple room linen operations for independent hotels, small resorts, and hosted properties.</p>
+        <div class="auth-tabs" role="tablist" aria-label="Account access">
+          <button type="button" class="auth-tab ${register ? "active" : ""}" id="auth-register-tab">Start free trial</button>
+          <button type="button" class="auth-tab ${register ? "" : "active"}" id="auth-login-tab">Sign in</button>
         </div>
+        ${
+          register
+            ? `<form id="trial-form" class="stack">
+                <label>Your name <input name="display_name" autocomplete="name" required placeholder="Alex Tan" /></label>
+                <label>Work email <input name="email" type="email" autocomplete="email" required placeholder="alex@yourhotel.com" /></label>
+                <label>Hotel or property name <input name="hotel_name" required placeholder="Harbour View Hotel" /></label>
+                <label>Password <input name="password" type="password" minlength="8" autocomplete="new-password" required placeholder="At least 8 characters" /></label>
+                <button class="btn" type="submit">Create free trial</button>
+                <p class="form-hint">Start with a 14-day free trial. You can configure rooms, linen, and staff after signing in.</p>
+              </form>`
+            : `<form id="login-form" class="stack">
+                <label>Work email <input name="email" type="email" autocomplete="email" required placeholder="you@yourhotel.com" /></label>
+                <label>Password <input name="password" type="password" autocomplete="current-password" placeholder="Your password" /></label>
+                <button class="btn" type="submit">Sign in</button>
+              </form>`
+        }
       </div>
     </div>
   `;
-  $("#login-form").addEventListener("submit", async (e) => {
+  $("#auth-register-tab")?.addEventListener("click", () => {
+    state.authMode = "register";
+    renderLogin();
+  });
+  $("#auth-login-tab")?.addEventListener("click", () => {
+    state.authMode = "login";
+    renderLogin();
+  });
+  $("#trial-form")?.addEventListener("submit", async (e) => {
     e.preventDefault();
     try {
-      await login(new FormData(e.target).get("email"));
+      const fd = new FormData(e.target);
+      await registerTrial({
+        display_name: String(fd.get("display_name") || "").trim(),
+        email: String(fd.get("email") || "").trim(),
+        hotel_name: String(fd.get("hotel_name") || "").trim(),
+        password: String(fd.get("password") || "")
+      });
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
+  $("#login-form")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    try {
+      const fd = new FormData(e.target);
+      await login(String(fd.get("email") || "").trim(), String(fd.get("password") || ""));
     } catch (err) {
       toast(err.message, true);
     }
@@ -518,6 +555,7 @@ function navItems() {
   if (can("transfer.view")) items.push(["transfers", "Linen transfers"]);
   if (can("admin.configure")) items.push(["admin", "Admin"]);
   if (isSuperadmin()) items.push(["hotel-setup", "Hotel setup"]);
+  items.push(["feedback", "Feedback"]);
   return items;
 }
 
@@ -587,7 +625,7 @@ function shell(content) {
     <div class="app-shell${isHousekeeperMode() ? " housekeeper-shell" : ""}">
       <header class="topbar">
         <div>
-          <p class="brand">LINOS Hotel<small>${property.name}</small></p>
+            <p class="brand">Masaero LINOS Hotel<small>${property.name}</small></p>
           ${
             showSwitcher
               ? `<label class="property-switcher">Property
@@ -596,7 +634,7 @@ function shell(content) {
                       .map(
                         (p) =>
                           `<option value="${p.id}" ${p.id === property.id ? "selected" : ""}>${p.name}${
-                            p.is_demo ? " (demo)" : ""
+                            ""
                           }</option>`
                       )
                       .join("")}
@@ -815,23 +853,36 @@ function renderSnapshotDetail(room) {
 
 function propertyDisclaimer() {
   const p = state.session?.property;
-  if (!p?.is_demo) return "";
-  const families = state.master?.familyCounts || {};
-  const familyLine = Object.entries(families)
-    .map(([name, count]) => `${name}: ${count}`)
-    .join(" · ");
-  const floors = state.master?.floors || [];
+  if (!p?.trial_ends_at || p.subscription_plan !== "free_trial") return "";
   return `
-    <div class="disclaimer">
-      <strong>Synthetic demo data — not official hotel inventory.</strong>
-      <div style="margin-top:0.45rem">${p.demo_disclaimer || ""}</div>
-      ${p.positioning ? `<div style="margin-top:0.45rem">${p.positioning}</div>` : ""}
-      <div style="margin-top:0.45rem">
-        Demo rooms: ${state.master?.rooms?.length || 0}
-        ${floors.length ? ` · Floors ${floors[0]}–${floors[floors.length - 1]}` : ""}
-        ${familyLine ? `<br/>Mix — ${familyLine}` : ""}
-      </div>
+    <div class="trial-banner">
+      <strong>Free trial</strong> · ${p.trial_days_remaining ?? ""} day(s) remaining.
+      Configure your property and invite your operations team from Hotel setup.
     </div>
+  `;
+}
+
+function renderFeedback() {
+  return `
+    <section class="panel feedback-panel">
+      <h2>Send feedback</h2>
+      <p class="lede">Tell the Masaero team what is working, what is confusing, or what would make daily linen operations easier.</p>
+      <form id="feedback-form" class="stack">
+        <label>Topic
+          <select name="category">
+            <option>Product idea</option>
+            <option>Something is not working</option>
+            <option>Usability</option>
+            <option>Other</option>
+          </select>
+        </label>
+        <label>Your message
+          <textarea name="message" rows="7" minlength="10" maxlength="5000" required placeholder="Tell us what happened or what you would like to see..."></textarea>
+        </label>
+        <button class="btn" type="submit">Send feedback</button>
+      </form>
+      <p class="form-hint">Your message is sent to the Masaero product owner and tracked with the LINOS Hotel work queue.</p>
+    </section>
   `;
 }
 
@@ -2240,10 +2291,10 @@ function renderHotelSetup() {
 
   let body = "";
   if (step === 1) {
-    const creating = state.setupForceCreate || !p || p.is_demo;
+    const creating = state.setupForceCreate || !p;
     body = `
       <h3>Hotel profile</h3>
-      <p class="lede">Create a new hotel or update the profile for the property you are configuring. Demo Seri Pacific stays available for practice.</p>
+      <p class="lede">Create a new hotel or update the profile for the property you are configuring. You can add more properties later.</p>
       <form id="setup-profile-form" class="grid-2">
         <label>Hotel name <input name="name" required value="${creating ? "" : p?.name || ""}" placeholder="e.g. Harbour View Hotel" /></label>
         <label>Code <input name="code" value="${creating ? "" : p?.code || ""}" placeholder="Auto from name if blank" ${
@@ -2424,6 +2475,7 @@ function render() {
   else if (state.view === "transfers") content = renderTransfers();
   else if (state.view === "admin") content = renderAdmin();
   else if (state.view === "hotel-setup") content = renderHotelSetup();
+  else if (state.view === "feedback") content = renderFeedback();
   else content = renderDashboard();
 
   $("#app").innerHTML = shell(content);
@@ -2439,6 +2491,24 @@ function selectedOptions(select) {
 
 function bindEvents() {
   $("#logout-btn")?.addEventListener("click", logout);
+
+  $("#feedback-form")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    try {
+      const fd = new FormData(e.target);
+      const result = await api("/feedback", {
+        method: "POST",
+        body: {
+          category: String(fd.get("category") || "Other"),
+          message: String(fd.get("message") || "").trim()
+        }
+      });
+      e.target.reset();
+      toast(result.linear?.issue?.url || result.feedback?.linear_issue_url ? "Thanks — your feedback was sent to the Masaero product owner." : "Thanks — your feedback was received.");
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
 
   $("#property-switcher")?.addEventListener("change", async (e) => {
     try {
@@ -2583,7 +2653,7 @@ function bindEvents() {
         allow_guest_pii_import: fd.get("allow_guest_pii_import") === "on"
       };
       const current = state.setupState?.property || state.session?.property;
-      const creating = state.setupForceCreate || !current || current.is_demo;
+      const creating = state.setupForceCreate || !current;
       let data;
       if (!creating) {
         data = await api("/setup/property", { method: "PATCH", body: payload });
@@ -2724,7 +2794,7 @@ function bindEvents() {
       state.morningCheckout = checkout;
       state.morningMode = mode;
       if (mode === "replace" && (state.tasks || []).length) {
-        const ok = window.confirm("Replace the current morning board with a new demo mix?");
+        const ok = window.confirm("Replace the current morning board with a new generated plan?");
         if (!ok) return;
       }
       const data = await api("/rounds/generate-morning", {
@@ -2743,7 +2813,7 @@ function bindEvents() {
       state.morningSummary = data.summary || null;
       const s = data.summary || {};
       toast(
-        `Generated ${s.change_tasks ?? data.added} change tasks (${s.checkout ?? "?"} checkout / ${s.stayover ?? "?"} stayover / ${s.vip ?? "?"} VIP / ${s.skipped ?? "?"} skipped) — synthetic demo mix.`
+        `Generated ${s.change_tasks ?? data.added} change tasks (${s.checkout ?? "?"} checkout / ${s.stayover ?? "?"} stayover / ${s.vip ?? "?"} VIP / ${s.skipped ?? "?"} skipped).`
       );
       render();
     } catch (err) {

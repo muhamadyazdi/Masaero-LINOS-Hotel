@@ -410,16 +410,49 @@ th { color: var(--muted); font-weight: 600; font-size: 0.82rem; text-transform: 
   padding: 1.5rem;
 }
 .login-card h1 { margin: 0 0 0.4rem; font-size: 2rem; }
-.demo-note {
-  margin-top: 1rem;
-  padding: 0.75rem;
-  border-radius: 12px;
-  background: #fff7ef;
-  border: 1px solid #f0d3b8;
-  color: #6a3b14;
-  font-size: 0.9rem;
+.eyebrow {
+  margin: 0 0 0.2rem;
+  color: var(--accent);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
 }
-
+.auth-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.35rem;
+  margin: 1.1rem 0;
+  padding: 0.25rem;
+  border-radius: 12px;
+  background: #eef3f6;
+}
+.auth-tab {
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+  padding: 0.6rem 0.5rem;
+  cursor: pointer;
+}
+.auth-tab.active {
+  background: white;
+  color: var(--brand);
+  box-shadow: 0 2px 8px rgba(12, 35, 54, 0.08);
+  font-weight: 700;
+}
+.form-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+.trial-banner {
+  padding: 0.75rem 0.9rem;
+  border-radius: 12px;
+  background: #eef8f2;
+  border: 1px solid #c8e5d2;
+  color: #205f3d;
+}
 .qty {
   display: inline-flex;
   align-items: center;

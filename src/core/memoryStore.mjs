@@ -54,7 +54,8 @@ export function createMemoryStore() {
     laundry_dispatch_lines: [],
     laundry_returns: [],
     laundry_return_allocations: [],
-    variances: []
+    variances: [],
+    feedback: []
   };
   const stockIndex = new Map();
 
