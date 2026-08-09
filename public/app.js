@@ -52,6 +52,8 @@ const state = {
   assignParamsSaved: false,
   setupRoomDraft: null,
   setupEditingRoomId: null,
+  setupMatrixCategoryId: "",
+  setupMatrixBedId: "",
   laundryBrief: null,
   setupGuideDismissed: {},
   setupGuideKey: null,
@@ -141,19 +143,19 @@ const SETUP_GUIDES = Object.freeze({
   },
   types: {
     title: "Step guide: Room types & beds",
-    body: "Room types (like Superior or Suite) and bed layouts decide the starter linen amounts. Use the starters if you’re unsure — you can fine-tune next."
+    body: "Room types (like Superior or Suite) and bed layouts decide the starter linen amounts. Apply starters, then edit names/codes in the tables below — or add your own rows and save."
   },
   catalogue: {
     title: "Step guide: Linen catalogue",
-    body: "These are the sheet and towel pieces you track. Start with the pack we provide; add or rename items later in Admin if needed."
+    body: "These are the sheet and towel pieces you track. Apply the starter pack, then amend codes/names or add items in the table and save."
   },
   standards: {
     title: "Step guide: What’s in the room",
-    body: "How many of each piece normally belong in each room type. Think “what the room should have when it’s ready for a guest.”"
+    body: "How many of each piece normally belong in each room type × bed. Generate defaults to fill the matrix, then pick a type and bed to view and amend quantities."
   },
   rooms: {
     title: "Step guide: Rooms",
-    body: "Add your rooms or units. Before we save them, you’ll confirm the linen amounts for that room type. Saved rooms appear at the bottom so you can amend or remove them."
+    body: "Configure each room’s number, floor, type, and bed layout. Confirm linen for that type before saving. Saved rooms appear at the bottom so you can amend or remove them."
   },
   ops: {
     title: "Step guide: Team & laundry",
@@ -2721,13 +2723,255 @@ function startDashboardPoll() {
   }, 50000);
 }
 
+function activeSetupLinenItems(s) {
+  return (s?.linenItems || [])
+    .filter((i) => i.is_active !== false)
+    .slice()
+    .sort((a, b) => (a.sort_order ?? 100) - (b.sort_order ?? 100) || a.name.localeCompare(b.name));
+}
+
+function setupStandardsLinesFor(s, categoryId, bedId) {
+  const standards = (s?.roomLinenStandards || []).filter(
+    (row) => row.category_id === categoryId && row.bed_config_id === bedId
+  );
+  const byItem = new Map(standards.map((row) => [row.linen_item_id, Number(row.quantity || 0)]));
+  return activeSetupLinenItems(s).map((item) => ({
+    linen_item_id: item.id,
+    code: item.code,
+    name: item.name,
+    quantity: byItem.get(item.id) || 0
+  }));
+}
+
+function ensureSetupMatrixSelection(s) {
+  const cats = s?.roomCategories || [];
+  const beds = s?.bedConfigs || [];
+  if (!cats.length || !beds.length) {
+    state.setupMatrixCategoryId = "";
+    state.setupMatrixBedId = "";
+    return;
+  }
+  if (!cats.some((c) => c.id === state.setupMatrixCategoryId)) {
+    state.setupMatrixCategoryId = cats[0].id;
+  }
+  if (!beds.some((b) => b.id === state.setupMatrixBedId)) {
+    state.setupMatrixBedId = beds[0].id;
+  }
+}
+
+function setupTypesBedsEditorHtml(cats, beds) {
+  const typeRows =
+    (cats.length
+      ? cats
+      : [{ id: "", code: "", name: "", family: "" }]
+    )
+      .map(
+        (c, idx) => `<tr data-row-kind="type">
+        <td><input name="type_code_${idx}" value="${escapeAttr(c.code || "")}" placeholder="SUP" required /></td>
+        <td><input name="type_name_${idx}" value="${escapeAttr(c.name || "")}" placeholder="Superior" required /></td>
+        <td><input name="type_family_${idx}" value="${escapeAttr(c.family || c.name || "")}" placeholder="Superior" /></td>
+        <td><input type="hidden" name="type_id_${idx}" value="${escapeAttr(c.id || "")}" /></td>
+      </tr>`
+      )
+      .join("");
+  const bedRows =
+    (beds.length ? beds : [{ id: "", code: "", name: "" }])
+      .map(
+        (b, idx) => `<tr data-row-kind="bed">
+        <td><input name="bed_code_${idx}" value="${escapeAttr(b.code || "")}" placeholder="KING" required /></td>
+        <td><input name="bed_name_${idx}" value="${escapeAttr(b.name || "")}" placeholder="King" required /></td>
+        <td><input type="hidden" name="bed_id_${idx}" value="${escapeAttr(b.id || "")}" /></td>
+      </tr>`
+      )
+      .join("");
+  return `
+      <h3>Room types &amp; beds</h3>
+      <p class="lede">Edit the lists below, or apply starters then amend. Changes save when you press Save.</p>
+      <button class="btn secondary setup-guide-again" type="button" data-show-guide="types">Show step guide</button>
+      <div class="row" style="margin-bottom:1rem">
+        <button class="btn secondary" type="button" id="setup-apply-types-beds">Apply starter types &amp; beds</button>
+      </div>
+      <form id="setup-types-form" class="setup-master-block">
+        <div class="row setup-master-head">
+          <h4>Room types (${cats.length})</h4>
+          <button class="btn secondary" type="button" id="setup-add-type-row">Add type</button>
+        </div>
+        <table class="setup-edit-table" id="setup-types-table">
+          <thead><tr><th>Code</th><th>Name</th><th>Family</th><th class="sr-only">Id</th></tr></thead>
+          <tbody>${typeRows}</tbody>
+        </table>
+        <div class="row" style="margin-top:0.75rem">
+          <button class="btn" type="submit">Save room types</button>
+        </div>
+      </form>
+      <form id="setup-beds-form" class="setup-master-block">
+        <div class="row setup-master-head">
+          <h4>Bed configs (${beds.length})</h4>
+          <button class="btn secondary" type="button" id="setup-add-bed-row">Add bed / layout</button>
+        </div>
+        <table class="setup-edit-table" id="setup-beds-table">
+          <thead><tr><th>Code</th><th>Name</th><th class="sr-only">Id</th></tr></thead>
+          <tbody>${bedRows}</tbody>
+        </table>
+        <div class="row" style="margin-top:0.75rem">
+          <button class="btn" type="submit">Save bed configs</button>
+        </div>
+      </form>`;
+}
+
+function setupCatalogueEditorHtml(linen) {
+  const rows =
+    (linen.length ? linen : [{ id: "", code: "", name: "", sort_order: 10 }])
+      .map(
+        (i, idx) => `<tr data-row-kind="linen">
+        <td><input name="linen_code_${idx}" value="${escapeAttr(i.code || "")}" placeholder="FS" required /></td>
+        <td><input name="linen_name_${idx}" value="${escapeAttr(i.name || "")}" placeholder="Fitted Sheet" required /></td>
+        <td><input name="linen_sort_${idx}" type="number" min="0" step="1" value="${Number(i.sort_order ?? (idx + 1) * 10)}" /></td>
+        <td><input type="hidden" name="linen_id_${idx}" value="${escapeAttr(i.id || "")}" /></td>
+      </tr>`
+      )
+      .join("");
+  return `
+      <h3>Linen catalogue</h3>
+      <p class="lede">Apply the starter pack, then amend or add pieces below and save.</p>
+      <button class="btn secondary setup-guide-again" type="button" data-show-guide="catalogue">Show step guide</button>
+      <div class="row" style="margin-bottom:1rem">
+        <button class="btn secondary" type="button" id="setup-apply-linen">Apply starter linen catalogue</button>
+      </div>
+      <form id="setup-catalogue-form" class="setup-master-block">
+        <div class="row setup-master-head">
+          <h4>Catalogue items (${linen.length})</h4>
+          <button class="btn secondary" type="button" id="setup-add-linen-row">Add item</button>
+        </div>
+        <table class="setup-edit-table" id="setup-catalogue-table">
+          <thead><tr><th>Code</th><th>Name</th><th>Sort</th><th class="sr-only">Id</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+        <div class="row" style="margin-top:0.75rem">
+          <button class="btn" type="submit">Save catalogue</button>
+        </div>
+      </form>`;
+}
+
+function setupStandardsEditorHtml(s) {
+  const cats = s?.roomCategories || [];
+  const beds = s?.bedConfigs || [];
+  const linen = activeSetupLinenItems(s);
+  const standardLines = s?.roomLinenStandards || [];
+  ensureSetupMatrixSelection(s);
+  const categoryId = state.setupMatrixCategoryId;
+  const bedId = state.setupMatrixBedId;
+  const lines = categoryId && bedId ? setupStandardsLinesFor(s, categoryId, bedId) : [];
+  const catName = cats.find((c) => c.id === categoryId)?.name || "";
+  const bedName = beds.find((b) => b.id === bedId)?.name || "";
+
+  const overviewRows = cats
+    .flatMap((cat) =>
+      beds.map((bed) => {
+        const pair = standardLines.filter(
+          (row) => row.category_id === cat.id && row.bed_config_id === bed.id && Number(row.quantity) > 0
+        );
+        const pieces = pair.reduce((sum, row) => sum + Number(row.quantity || 0), 0);
+        const selected = cat.id === categoryId && bed.id === bedId;
+        return `<tr class="${selected ? "is-selected" : ""}">
+          <td>${escapeAttr(cat.name)}</td>
+          <td>${escapeAttr(bed.name)}</td>
+          <td>${pair.length} items · ${pieces} pcs</td>
+          <td><button class="btn secondary" type="button" data-matrix-pick="${escapeAttr(cat.id)}|${escapeAttr(
+            bed.id
+          )}">${selected ? "Editing" : "View / edit"}</button></td>
+        </tr>`;
+      })
+    )
+    .join("");
+
+  const matrixBody = lines.length
+    ? lines
+        .map(
+          (line) => `<tr>
+            <td>${escapeAttr(line.name)} <span class="muted">${escapeAttr(line.code)}</span></td>
+            <td><input name="std_qty_${line.linen_item_id}" type="number" min="0" max="40" value="${line.quantity}" data-linen-item-id="${escapeAttr(
+              line.linen_item_id
+            )}" /></td>
+          </tr>`
+        )
+        .join("")
+    : `<tr><td colspan="2" class="muted">Add room types, beds, and linen first — or generate defaults.</td></tr>`;
+
+  const blockers = [];
+  if (!cats.length) blockers.push("room types");
+  if (!beds.length) blockers.push("bed configs");
+  if (!linen.length) blockers.push("linen catalogue");
+
+  return `
+      <h3>${labeledInfo("What’s normally in the room", "fitted")}</h3>
+      <p class="lede">Quantities per room type × bed. Generate defaults, then open any row below to see and amend the matrix.</p>
+      <button class="btn secondary setup-guide-again" type="button" data-show-guide="standards">Show step guide</button>
+      <div class="row" style="margin-bottom:1rem">
+        <button class="btn" type="button" id="setup-apply-standards" ${
+          blockers.length ? "disabled" : ""
+        }>Generate default standards matrix</button>
+      </div>
+      <p class="lede">${standardLines.length} standard lines saved${
+        blockers.length ? ` · Finish ${blockers.join(", ")} first` : ""
+      }.</p>
+      ${
+        cats.length && beds.length
+          ? `<div class="setup-master-block">
+        <h4>Standards overview</h4>
+        <p class="lede">Each room type × bed combination. Open one to visualise and edit quantities.</p>
+        <table class="setup-rooms-table setup-standards-overview">
+          <thead><tr><th>Room type</th><th>Bed / layout</th><th>Fitted set</th><th></th></tr></thead>
+          <tbody>${overviewRows}</tbody>
+        </table>
+      </div>
+      <form id="setup-standards-form" class="setup-master-block">
+        <h4>Edit matrix · ${escapeAttr(catName)} × ${escapeAttr(bedName)}</h4>
+        <div class="grid-2" style="margin-bottom:0.75rem">
+          <label>Room type
+            <select id="setup-matrix-category" name="category_id">
+              ${cats
+                .map(
+                  (c) =>
+                    `<option value="${escapeAttr(c.id)}" ${c.id === categoryId ? "selected" : ""}>${escapeAttr(
+                      c.name
+                    )}</option>`
+                )
+                .join("")}
+            </select>
+          </label>
+          <label>Bed / layout
+            <select id="setup-matrix-bed" name="bed_config_id">
+              ${beds
+                .map(
+                  (b) =>
+                    `<option value="${escapeAttr(b.id)}" ${b.id === bedId ? "selected" : ""}>${escapeAttr(
+                      b.name
+                    )}</option>`
+                )
+                .join("")}
+            </select>
+          </label>
+        </div>
+        <table class="setup-linen-matrix" id="setup-standards-matrix">
+          <thead><tr><th>Item</th><th>Qty</th></tr></thead>
+          <tbody>${matrixBody}</tbody>
+        </table>
+        <div class="row" style="margin-top:0.85rem">
+          <button class="btn" type="submit" ${!lines.length ? "disabled" : ""}>Save this room type × bed</button>
+        </div>
+      </form>`
+          : `<p class="lede">No room types or beds yet — go back and save them first.</p>`
+      }`;
+}
+
 function setupSavedRoomsHtml(s, spaces) {
   const rooms = (s?.rooms || []).filter((r) => r.is_active !== false);
   const cats = s?.roomCategories || [];
   const beds = s?.bedConfigs || [];
   const editingId = state.setupEditingRoomId;
   if (!rooms.length) {
-    return `<div class="setup-saved-rooms"><h4>Saved ${spaces}</h4><p class="lede">None yet — add rooms above.</p></div>`;
+    return `<div class="setup-saved-rooms"><h4>Room settings · saved ${spaces}</h4><p class="lede">None yet — add rooms above, then amend type, bed, floor, or number here.</p></div>`;
   }
   const rows = rooms
     .map((room) => {
@@ -2771,8 +3015,8 @@ function setupSavedRoomsHtml(s, spaces) {
     .join("");
   return `
     <div class="setup-saved-rooms">
-      <h4>Saved ${spaces} (${rooms.length})</h4>
-      <p class="lede">Amend or remove rooms below. Removed rooms are taken out of daily ops.</p>
+      <h4>Room settings · saved ${spaces} (${rooms.length})</h4>
+      <p class="lede">Amend number, floor, type, or bed — or remove a room from daily ops.</p>
       <table class="setup-rooms-table">
         <thead><tr><th>Room</th><th>Floor</th><th>Type</th><th>Bed / layout</th><th></th></tr></thead>
         <tbody>${rows}</tbody>
@@ -3041,50 +3285,11 @@ function renderHotelSetup() {
         </div>
       </form>`;
   } else if (key === "types") {
-    body = `
-      <h3>Room types &amp; beds</h3>
-      <p class="lede">Define the room types and bed configs used for what’s normally in the room.</p>
-      <button class="btn secondary setup-guide-again" type="button" data-show-guide="types">Show step guide</button>
-      <div class="row" style="margin-bottom:1rem">
-        <button class="btn" type="button" id="setup-apply-types-beds">Apply starter types &amp; beds</button>
-      </div>
-      <div class="grid-2">
-        <div>
-          <h4>Room types (${cats.length})</h4>
-          <ul class="setup-list">${
-            cats.map((c) => `<li><strong>${c.name}</strong> · ${c.code}</li>`).join("") ||
-            "<li class='muted'>None yet — use starters</li>"
-          }</ul>
-        </div>
-        <div>
-          <h4>Bed configs (${beds.length})</h4>
-          <ul class="setup-list">${
-            beds.map((b) => `<li><strong>${b.name}</strong> · ${b.code}</li>`).join("") ||
-            "<li class='muted'>None yet — use starters</li>"
-          }</ul>
-        </div>
-      </div>`;
+    body = setupTypesBedsEditorHtml(cats, beds);
   } else if (key === "catalogue") {
-    body = `
-      <h3>Linen catalogue</h3>
-      <p class="lede">Core pieces for daily changeouts. Start from the starter pack, then refine later in Admin if needed.</p>
-      <button class="btn secondary setup-guide-again" type="button" data-show-guide="catalogue">Show step guide</button>
-      <div class="row" style="margin-bottom:1rem">
-        <button class="btn" type="button" id="setup-apply-linen">Apply starter linen catalogue</button>
-      </div>
-      <ul class="setup-list">${
-        linen.map((i) => `<li><strong>${i.code}</strong> — ${i.name}</li>`).join("") ||
-        "<li class='muted'>No items yet</li>"
-      }</ul>`;
+    body = setupCatalogueEditorHtml(linen);
   } else if (key === "standards") {
-    body = `
-      <h3>${labeledInfo("What’s normally in the room", "fitted")}</h3>
-      <p class="lede">Quantities per room type × bed. Defaults scale Club/Suite higher than Superior.</p>
-      <button class="btn secondary setup-guide-again" type="button" data-show-guide="standards">Show step guide</button>
-      <div class="row" style="margin-bottom:1rem">
-        <button class="btn" type="button" id="setup-apply-standards">Generate default standards matrix</button>
-      </div>
-      <p class="lede">${s?.roomLinenStandards?.length || 0} standard lines saved.</p>`;
+    body = setupStandardsEditorHtml(s);
   } else if (key === "rooms") {
     const catOpts = cats.map((c) => `<option value="${c.id}">${c.name}</option>`).join("");
     const bedOpts = beds.map((b) => `<option value="${b.id}">${b.name}</option>`).join("");
@@ -3092,8 +3297,8 @@ function renderHotelSetup() {
     const savedBlock = setupSavedRoomsHtml(s, spaces);
     if (small) {
       body = `
-      <h3>Add your ${spaces}</h3>
-      <p class="lede">Choose type and layout, confirm linen quantities, then save. Saved ${spaces} appear at the bottom.</p>
+      <h3>Room settings · add your ${spaces}</h3>
+      <p class="lede">Set floor, room type, and bed layout for new ${spaces}. You’ll confirm linen quantities next. Amend saved ${spaces} at the bottom.</p>
       <div class="row" style="margin-bottom:1rem">
         <button class="btn secondary setup-guide-again" type="button" data-show-guide="rooms">Show step guide</button>
         <button class="btn secondary" type="button" id="setup-ensure-starters">Refresh linen starters</button>
@@ -3114,8 +3319,8 @@ function renderHotelSetup() {
       ${savedBlock}`;
     } else {
       body = `
-      <h3>Bulk room builder</h3>
-      <p class="lede">Generate rooms as {floor}{01..N}. Confirm linen for the selected type before saving. Existing numbers are skipped.</p>
+      <h3>Room settings · bulk builder</h3>
+      <p class="lede">Generate rooms as {floor}{01..N} with a default type and bed. Confirm linen for that type before saving. Amend individual room settings in the saved list below.</p>
       <button class="btn secondary setup-guide-again" type="button" data-show-guide="rooms">Show step guide</button>
       ${
         confirmBlock ||
@@ -3467,12 +3672,98 @@ function bindEvents() {
     render();
   });
 
+  function appendSetupEditRow(tableId, kind) {
+    const tbody = document.querySelector(`#${tableId} tbody`);
+    if (!tbody) return;
+    const idx = tbody.querySelectorAll("tr").length;
+    const tr = document.createElement("tr");
+    tr.dataset.rowKind = kind;
+    if (kind === "type") {
+      tr.innerHTML = `<td><input name="type_code_${idx}" value="" placeholder="SUP" required /></td>
+        <td><input name="type_name_${idx}" value="" placeholder="Superior" required /></td>
+        <td><input name="type_family_${idx}" value="" placeholder="Superior" /></td>
+        <td><input type="hidden" name="type_id_${idx}" value="" /></td>`;
+    } else if (kind === "bed") {
+      tr.innerHTML = `<td><input name="bed_code_${idx}" value="" placeholder="KING" required /></td>
+        <td><input name="bed_name_${idx}" value="" placeholder="King" required /></td>
+        <td><input type="hidden" name="bed_id_${idx}" value="" /></td>`;
+    } else {
+      tr.innerHTML = `<td><input name="linen_code_${idx}" value="" placeholder="FS" required /></td>
+        <td><input name="linen_name_${idx}" value="" placeholder="Fitted Sheet" required /></td>
+        <td><input name="linen_sort_${idx}" type="number" min="0" step="1" value="${(idx + 1) * 10}" /></td>
+        <td><input type="hidden" name="linen_id_${idx}" value="" /></td>`;
+    }
+    tbody.appendChild(tr);
+    tr.querySelector("input")?.focus();
+  }
+
+  $("#setup-add-type-row")?.addEventListener("click", () => appendSetupEditRow("setup-types-table", "type"));
+  $("#setup-add-bed-row")?.addEventListener("click", () => appendSetupEditRow("setup-beds-table", "bed"));
+  $("#setup-add-linen-row")?.addEventListener("click", () => appendSetupEditRow("setup-catalogue-table", "linen"));
+
   $("#setup-apply-types-beds")?.addEventListener("click", async () => {
     try {
       await api("/setup/room-types", { method: "POST", body: { use_starters: true } });
       await api("/setup/beds", { method: "POST", body: { use_starters: true } });
       state.setupState = await loadSetupState();
-      toast("Starter room types and beds applied");
+      toast("Starter room types and beds applied — edit the tables below if needed");
+      render();
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
+
+  $("#setup-types-form")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    try {
+      const fd = new FormData(e.target);
+      const room_types = [];
+      for (const [key, value] of fd.entries()) {
+        const m = String(key).match(/^type_code_(\d+)$/);
+        if (!m) continue;
+        const idx = m[1];
+        const code = String(value || "").trim();
+        const name = String(fd.get(`type_name_${idx}`) || "").trim();
+        if (!code && !name) continue;
+        room_types.push({
+          id: String(fd.get(`type_id_${idx}`) || "").trim() || undefined,
+          code,
+          name,
+          family: String(fd.get(`type_family_${idx}`) || name).trim()
+        });
+      }
+      if (!room_types.length) throw new Error("Add at least one room type");
+      const data = await api("/setup/room-types", { method: "POST", body: { room_types } });
+      state.setupState = data;
+      toast(`Saved ${room_types.length} room type${room_types.length === 1 ? "" : "s"}`);
+      render();
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
+
+  $("#setup-beds-form")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    try {
+      const fd = new FormData(e.target);
+      const beds = [];
+      for (const [key, value] of fd.entries()) {
+        const m = String(key).match(/^bed_code_(\d+)$/);
+        if (!m) continue;
+        const idx = m[1];
+        const code = String(value || "").trim();
+        const name = String(fd.get(`bed_name_${idx}`) || "").trim();
+        if (!code && !name) continue;
+        beds.push({
+          id: String(fd.get(`bed_id_${idx}`) || "").trim() || undefined,
+          code,
+          name
+        });
+      }
+      if (!beds.length) throw new Error("Add at least one bed config");
+      const data = await api("/setup/beds", { method: "POST", body: { beds } });
+      state.setupState = data;
+      toast(`Saved ${beds.length} bed config${beds.length === 1 ? "" : "s"}`);
       render();
     } catch (err) {
       toast(err.message, true);
@@ -3483,7 +3774,36 @@ function bindEvents() {
     try {
       const data = await api("/setup/linen-items", { method: "POST", body: { use_starters: true } });
       state.setupState = data;
-      toast("Starter linen catalogue applied");
+      toast("Starter linen catalogue applied — amend the table below if needed");
+      render();
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
+
+  $("#setup-catalogue-form")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    try {
+      const fd = new FormData(e.target);
+      const linen_items = [];
+      for (const [key, value] of fd.entries()) {
+        const m = String(key).match(/^linen_code_(\d+)$/);
+        if (!m) continue;
+        const idx = m[1];
+        const code = String(value || "").trim();
+        const name = String(fd.get(`linen_name_${idx}`) || "").trim();
+        if (!code && !name) continue;
+        linen_items.push({
+          id: String(fd.get(`linen_id_${idx}`) || "").trim() || undefined,
+          code,
+          name,
+          sort_order: Number(fd.get(`linen_sort_${idx}`) ?? (linen_items.length + 1) * 10)
+        });
+      }
+      if (!linen_items.length) throw new Error("Add at least one linen item");
+      const data = await api("/setup/linen-items", { method: "POST", body: { linen_items } });
+      state.setupState = data;
+      toast(`Saved ${linen_items.length} catalogue item${linen_items.length === 1 ? "" : "s"}`);
       render();
     } catch (err) {
       toast(err.message, true);
@@ -3497,7 +3817,54 @@ function bindEvents() {
         body: { use_defaults: true, replace: true }
       });
       state.setupState = data;
-      toast("Default fitted standards generated");
+      ensureSetupMatrixSelection(data);
+      toast("Default fitted standards generated — review the matrix below");
+      render();
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
+
+  document.querySelectorAll("[data-matrix-pick]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const [categoryId, bedId] = String(btn.getAttribute("data-matrix-pick") || "").split("|");
+      if (!categoryId || !bedId) return;
+      state.setupMatrixCategoryId = categoryId;
+      state.setupMatrixBedId = bedId;
+      render();
+    });
+  });
+
+  const syncMatrixSelects = () => {
+    const cat = $("#setup-matrix-category")?.value;
+    const bed = $("#setup-matrix-bed")?.value;
+    if (!cat || !bed) return;
+    if (cat === state.setupMatrixCategoryId && bed === state.setupMatrixBedId) return;
+    state.setupMatrixCategoryId = cat;
+    state.setupMatrixBedId = bed;
+    render();
+  };
+  $("#setup-matrix-category")?.addEventListener("change", syncMatrixSelects);
+  $("#setup-matrix-bed")?.addEventListener("change", syncMatrixSelects);
+
+  $("#setup-standards-form")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    try {
+      const categoryId = state.setupMatrixCategoryId || $("#setup-matrix-category")?.value;
+      const bedId = state.setupMatrixBedId || $("#setup-matrix-bed")?.value;
+      if (!categoryId || !bedId) throw new Error("Choose a room type and bed");
+      const standards = [...e.target.querySelectorAll("input[data-linen-item-id]")].map((input) => ({
+        category_id: categoryId,
+        bed_config_id: bedId,
+        linen_item_id: input.getAttribute("data-linen-item-id"),
+        quantity: Number(input.value || 0)
+      }));
+      const data = await api("/setup/standards", {
+        method: "POST",
+        body: { standards, replace: false }
+      });
+      state.setupState = data;
+      toast("Fitted standards saved for this room type × bed");
       render();
     } catch (err) {
       toast(err.message, true);

@@ -1339,6 +1339,107 @@ test("hotel setup: superadmin creates hotel through readiness and morning board"
   assert.ok((morning.tasks || []).length > 0);
 });
 
+test("hotel setup: amend room types, catalogue, and standards matrix", () => {
+  const { service } = setup();
+  const superadmin = { email: "muhamadyazdi@gmail.com", sub: "local:muhamadyazdi@gmail.com" };
+  const headers = (propertyId) => ({ "x-linos-property-id": propertyId });
+
+  const created = service.handle(
+    superadmin,
+    "POST",
+    "/setup/property",
+    { name: "Editable Masters Inn", code: "EMI", timezone: "Asia/Kuala_Lumpur" }
+  );
+  const propertyId = created.property.id;
+  const q = { propertyId };
+
+  service.handle(superadmin, "POST", "/setup/room-types", { use_starters: true }, q, headers(propertyId));
+  service.handle(superadmin, "POST", "/setup/beds", { use_starters: true }, q, headers(propertyId));
+  service.handle(superadmin, "POST", "/setup/linen-items", { use_starters: true }, q, headers(propertyId));
+  service.handle(
+    superadmin,
+    "POST",
+    "/setup/standards",
+    { use_defaults: true, replace: true },
+    q,
+    headers(propertyId)
+  );
+
+  let state = service.handle(superadmin, "GET", "/setup/state", {}, q, headers(propertyId));
+  const cat = state.roomCategories[0];
+  const bed = state.bedConfigs[0];
+  const linen = state.linenItems[0];
+
+  const renamed = service.handle(
+    superadmin,
+    "POST",
+    "/setup/room-types",
+    {
+      room_types: [
+        { id: cat.id, code: cat.code, name: "Garden Superior", family: cat.family },
+        { code: "LOFT", name: "Loft", family: "Suite" }
+      ]
+    },
+    q,
+    headers(propertyId)
+  );
+  assert.ok(renamed.roomCategories.some((c) => c.name === "Garden Superior"));
+  assert.ok(renamed.roomCategories.some((c) => c.code === "LOFT"));
+
+  const catalogue = service.handle(
+    superadmin,
+    "POST",
+    "/setup/linen-items",
+    {
+      linen_items: [
+        { id: linen.id, code: linen.code, name: "King Fitted Sheet", sort_order: linen.sort_order },
+        { code: "TH", name: "Throw", sort_order: 200 }
+      ]
+    },
+    q,
+    headers(propertyId)
+  );
+  assert.ok(catalogue.linenItems.some((i) => i.name === "King Fitted Sheet"));
+  assert.ok(catalogue.linenItems.some((i) => i.code === "TH"));
+
+  const matrix = service.handle(
+    superadmin,
+    "GET",
+    "/setup/linen-matrix",
+    {},
+    { propertyId, category_id: cat.id, bed_config_id: bed.id },
+    headers(propertyId)
+  );
+  assert.ok((matrix.lines || []).length > 0);
+
+  const target = matrix.lines.find((line) => line.linen_item_id === linen.id) || matrix.lines[0];
+  const saved = service.handle(
+    superadmin,
+    "POST",
+    "/setup/standards",
+    {
+      standards: [
+        {
+          category_id: cat.id,
+          bed_config_id: bed.id,
+          linen_item_id: target.linen_item_id,
+          quantity: Number(target.quantity || 0) + 1
+        }
+      ],
+      replace: false
+    },
+    q,
+    headers(propertyId)
+  );
+  const updated = saved.roomLinenStandards.find(
+    (row) =>
+      row.category_id === cat.id &&
+      row.bed_config_id === bed.id &&
+      row.linen_item_id === target.linen_item_id
+  );
+  assert.equal(updated.quantity, Number(target.quantity || 0) + 1);
+});
+
 test("phase 2 room-to-store collection is piece-counted and role enforced", () => {
   const { service, supervisor, agent1, store } = setup();
   const porter = { email: "porter@linos.hotel", sub: "local:porter@linos.hotel" };
