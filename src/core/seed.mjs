@@ -355,7 +355,16 @@ export function seedDemoProperty(store, { bootstrapEmail = "muhamadyazdi@gmail.c
         is_demo: true,
         demo_disclaimer: DEMO_DISCLAIMER,
         subscription_plan: "demo",
-        subscription_status: "active"
+        subscription_status: "active",
+        property_kind: "hotel",
+        property_scale: "large",
+        features_json: {
+          owner_mode: false,
+          team_mode: true,
+          floor_mode: true,
+          custody_mode: true,
+          laundry_partner: true
+        }
       });
       ensureDemoStaffRoster(store, existing.id, { bootstrapEmail });
       ensureExtraKits(store, existing.id);
@@ -381,7 +390,16 @@ export function seedDemoProperty(store, { bootstrapEmail = "muhamadyazdi@gmail.c
     location_model: "hotel_room_store_laundry",
     subscription_plan: "demo",
     subscription_status: "active",
-    demo_staff_profile: DEMO_STAFF_PROFILE
+    demo_staff_profile: DEMO_STAFF_PROFILE,
+    property_kind: "hotel",
+    property_scale: "large",
+    features_json: {
+      owner_mode: false,
+      team_mode: true,
+      floor_mode: true,
+      custody_mode: true,
+      laundry_partner: true
+    }
   });
 
   const storeLoc = store.insert("stores", {
@@ -399,7 +417,10 @@ export function seedDemoProperty(store, { bootstrapEmail = "muhamadyazdi@gmail.c
     name: "Laundry Partner",
     standard_turnaround_hours: 24,
     express_turnaround_hours: 8,
-    is_active: true
+    is_active: true,
+    partner_type: "manual",
+    external_ref: null,
+    config_json: {}
   });
 
   // Future-capable amenity / non-room locations (not Phase 1 room-linen workflow)

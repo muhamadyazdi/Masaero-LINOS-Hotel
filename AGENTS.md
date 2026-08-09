@@ -4,14 +4,15 @@ Guidance for coding agents working in this repository.
 
 ## Product
 
-**LINOS Hotel** is a greenfield hotel linen operations platform focused on:
+**LINOS Hotel** is a greenfield linen operations platform for **small hotels, spas, and small hospitality**, scalable to major hotel ops. It focuses on:
 
-- Daily room linen rounds and housekeeper assignment
+- Daily room / treatment-room linen rounds (owner-operated or housekeeper assignment)
 - **Hotel-native locations:** rooms are stock points; store and laundry are custody parties. UI never says "Station" (labels: Housekeeper / Supervisor).
 - Piece-level clean/soiled accountability via append-only ledger
 - Fitted set (Admin) vs room extras (guest request) — extras never inflate fitted config
 - Exception evidence capture
 - Room-to-store collection and laundry reconciliation (Phase 2 workflows)
+- **Optional laundry partners** (including AeroSparkle) — never required to go live
 
 It does **not** fork the hospital LINOS codebase. It reuses architectural patterns only: server-enforced capabilities, append-only ledger, dual acknowledgement, idempotent commits, property scoping.
 
@@ -59,9 +60,12 @@ docs/                       Data dictionary, Phase 0, hospital migration
 
 ## Hotel setup vs Admin
 
-- **Hotel setup** (nav: Superadmin only): one-time onboarding wizard to create a hotel — profile, room types, linen catalogue, fitted standards, bulk rooms, store/staff bootstrap, readiness.
+- **Hotel setup** (nav: Superadmin only): one-time onboarding to create a property. **Small** scale uses a short path (place → rooms → team/laundry → go live). **Standard/large** keep the full rail (types, catalogue, standards, bulk rooms, ops, review).
+- Properties carry `property_kind` (`hotel` / `boutique` / `spa` / `hosted` / `other`), `property_scale` (`small` / `standard` / `large`), and `features` packs: `owner_mode`, `team_mode`, `floor_mode`, `custody_mode`, `laundry_partner`. Nav density follows packs; server capabilities remain the authz boundary.
+- Free Version defaults to **small + owner_mode**. Demo Masaero is **large** with all packs on.
+- Laundry partner types on `laundry_providers`: `none` | `manual` | `aerosparkle` | `other`. AeroSparkle is optional.
 - Incomplete Superadmins land on Hotel setup (first failing readiness step) after login; ready properties land on Dashboard.
-- **Admin** (`admin.configure`): day-to-day operational config — room grid, fitted linen per room, default floors. Supervisors use Admin after setup.
+- **Admin** (`admin.configure`): day-to-day room grid, fitted linen, default floors, and **Grow this property** pack toggles. Supervisors use Admin after setup.
 - `/setup/properties` is scoped: Free Version Superadmins see only their own hotel. Platform operators (`LINOS_BOOTSTRAP_ADMIN_EMAILS`) can list all properties.
 
 ## Demo data

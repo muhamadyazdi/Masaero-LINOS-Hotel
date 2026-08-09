@@ -26,17 +26,25 @@ import {
 } from "./model.mjs";
 import { seedDemoProperty } from "./seed.mjs";
 import {
-  SETUP_STARTER_BEDS,
-  SETUP_STARTER_LINEN,
-  SETUP_STARTER_ROOM_TYPES,
   buildDefaultStandardsMatrix,
+  defaultFeaturesFor,
   insertStarterExceptions,
   insertStarterRules,
+  isSmallScale,
+  normalizeFeatures,
+  normalizeLaundryPartnerType,
+  normalizePropertyKind,
+  normalizePropertyScale,
+  opsDefaultsForScale,
+  parseFeaturesJson,
   planBulkRooms,
+  planSimpleRooms,
   setupStaffEmail,
   singleFloorDefaults,
   slugCode,
-  splitFloorsAcrossStaff
+  spaceLabel,
+  splitFloorsAcrossStaff,
+  startersForKind
 } from "./hotelSetup.mjs";
 
 export class HotelService {
@@ -225,6 +233,11 @@ export class HotelService {
     const trialDaysRemaining = trialEndsAt
       ? Math.max(0, Math.ceil((new Date(trialEndsAt).getTime() - Date.now()) / 86400000))
       : null;
+    const propertyKind = normalizePropertyKind(property.property_kind);
+    const propertyScale = normalizePropertyScale(
+      property.property_scale || (property.is_demo ? "large" : "small")
+    );
+    const features = parseFeaturesJson(property.features_json, propertyScale, propertyKind);
     return {
       id: property.id,
       code: property.code,
@@ -242,8 +255,18 @@ export class HotelService {
       subscription_status: property.subscription_status || "active",
       trial_started_at: property.trial_started_at || null,
       trial_ends_at: trialEndsAt,
-      trial_days_remaining: trialDaysRemaining
+      trial_days_remaining: trialDaysRemaining,
+      property_kind: propertyKind,
+      property_scale: propertyScale,
+      features,
+      space_label: spaceLabel(propertyKind)
     };
+  }
+
+  propertyFeatures(property) {
+    const kind = normalizePropertyKind(property?.property_kind);
+    const scale = normalizePropertyScale(property?.property_scale || (property?.is_demo ? "large" : "small"));
+    return parseFeaturesJson(property?.features_json, scale, kind);
   }
 
   authenticateLocal(email, password = "") {
@@ -268,6 +291,9 @@ export class HotelService {
     const hotelName = String(body.hotel_name || body.hotelName || "").trim();
     const password = String(body.password || "");
     const passwordConfirmation = String(body.password_confirmation || body.passwordConfirm || "");
+    const propertyKind = normalizePropertyKind(body.property_kind || body.propertyKind || "hotel");
+    const propertyScale = normalizePropertyScale(body.property_scale || body.propertyScale || "small");
+    const features = normalizeFeatures(body.features, propertyScale, propertyKind);
     if (!/^\S+@\S+\.\S+$/.test(email)) throw new LinosError(400, "ERR-TRIAL-001", "Enter a valid work email.");
     if (displayName.length < 2) throw new LinosError(400, "ERR-TRIAL-002", "Enter your name.");
     if (hotelName.length < 2) throw new LinosError(400, "ERR-TRIAL-003", "Enter your hotel or property name.");
@@ -284,6 +310,7 @@ export class HotelService {
       code = `${baseCode.slice(0, 20)}-${suffix}`;
       suffix += 1;
     }
+    const starters = startersForKind(propertyKind);
     const property = this.store.insert("properties", {
       id: newId("prop"),
       code,
@@ -291,7 +318,9 @@ export class HotelService {
       timezone: String(body.timezone || "Asia/Kuala_Lumpur").trim() || "Asia/Kuala_Lumpur",
       is_demo: false,
       demo_disclaimer: null,
-      positioning: String(body.positioning || "Independent hotel linen operations workspace").trim(),
+      positioning: String(
+        body.positioning || "Independent linen operations for small hotels, spas, and hospitality"
+      ).trim(),
       star_rating: body.star_rating != null && body.star_rating !== "" ? Number(body.star_rating) : null,
       address_line: String(body.address_line || "").trim() || null,
       allow_guest_pii_import: false,
@@ -300,7 +329,10 @@ export class HotelService {
       subscription_plan: "free",
       subscription_status: "active",
       trial_started_at: null,
-      trial_ends_at: null
+      trial_ends_at: null,
+      property_kind: propertyKind,
+      property_scale: propertyScale,
+      features_json: features
     });
     const user = this.store.insert("users", {
       id: newId("user"),
@@ -326,12 +358,27 @@ export class HotelService {
       id: newId("lp"),
       property_id: property.id,
       code: "MAIN",
-      name: "Laundry Partner",
+      name: "No laundry partner",
       standard_turnaround_hours: 24,
       express_turnaround_hours: 8,
-      is_active: true
+      is_active: true,
+      partner_type: "none",
+      external_ref: null,
+      config_json: {}
     });
-    const categories = SETUP_STARTER_ROOM_TYPES.map((row) =>
+    if (propertyKind === "spa") {
+      this.store.insert("amenity_locations", {
+        id: newId("amn"),
+        property_id: property.id,
+        code: "SPA",
+        name: "Spa",
+        kind: "spa",
+        floor_number: null,
+        is_active: true,
+        notes: "Spa amenity stub for small hospitality linen ops."
+      });
+    }
+    const categories = starters.roomTypes.map((row) =>
       this.store.insert("room_categories", {
         id: newId("cat"),
         property_id: property.id,
@@ -340,7 +387,7 @@ export class HotelService {
         family: row.family
       })
     );
-    const beds = SETUP_STARTER_BEDS.map((row) =>
+    const beds = starters.beds.map((row) =>
       this.store.insert("bed_configs", {
         id: newId("bed"),
         property_id: property.id,
@@ -348,7 +395,7 @@ export class HotelService {
         name: row.name
       })
     );
-    const linenItems = SETUP_STARTER_LINEN.map((row) =>
+    const linenItems = starters.linenItems.map((row) =>
       this.store.insert("linen_items", {
         id: newId("lin"),
         property_id: property.id,
@@ -373,7 +420,13 @@ export class HotelService {
       "account.free_version_started",
       "property",
       property.id,
-      { owner_email: email, plan: "free", store_id: starterStore.id }
+      {
+        owner_email: email,
+        plan: "free",
+        store_id: starterStore.id,
+        property_kind: propertyKind,
+        property_scale: propertyScale
+      }
     );
     return {
       ok: true,
@@ -3005,12 +3058,14 @@ export class HotelService {
     return this.platformOperatorEmails().includes(String(user?.email || "").toLowerCase());
   }
 
-  setupStarters() {
+  setupStarters(propertyKind = "hotel") {
+    const starters = startersForKind(propertyKind);
     return {
       ok: true,
-      roomTypes: SETUP_STARTER_ROOM_TYPES,
-      beds: SETUP_STARTER_BEDS,
-      linenItems: SETUP_STARTER_LINEN
+      property_kind: normalizePropertyKind(propertyKind),
+      roomTypes: starters.roomTypes,
+      beds: starters.beds,
+      linenItems: starters.linenItems
     };
   }
 
@@ -3046,9 +3101,10 @@ export class HotelService {
     );
     const exceptions = this.store.list("exception_categories", (e) => e.property_id === pid);
     const rules = this.store.list("scheduling_rules", (r) => r.property_id === pid);
+    const pub = this.publicProperty(access.property);
     return {
       ok: true,
-      property: this.publicProperty(access.property),
+      property: pub,
       roomCategories: categories,
       bedConfigs: beds,
       linenItems,
@@ -3061,12 +3117,16 @@ export class HotelService {
       supervisorsCount: supervisors.length,
       exceptionCategories: exceptions,
       schedulingRules: rules,
-      readiness: this.computeSetupReadiness(pid)
+      readiness: this.computeSetupReadiness(pid),
+      opsDefaults: opsDefaultsForScale(pub.property_scale),
+      isSmallSetup: isSmallScale(pub.property_scale)
     };
   }
 
   computeSetupReadiness(propertyId) {
     const property = this.store.find("properties", (p) => p.id === propertyId);
+    const features = this.propertyFeatures(property || {});
+    const spaces = spaceLabel(property?.property_kind);
     const categories = this.store.list("room_categories", (c) => c.property_id === propertyId);
     const beds = this.store.list("bed_configs", (b) => b.property_id === propertyId);
     const linenItems = this.store.list(
@@ -3080,6 +3140,16 @@ export class HotelService {
       "users",
       (u) => u.property_id === propertyId && u.role_name === ROLES.STATION_AGENT && u.is_active
     );
+    const operators = this.store.list(
+      "users",
+      (u) =>
+        u.property_id === propertyId &&
+        u.is_active &&
+        (u.is_superadmin ||
+          u.is_admin ||
+          u.role_name === ROLES.STATION_SUPERVISOR ||
+          u.role_name === ROLES.STATION_AGENT)
+    );
     const pairsCovered = new Set(standards.map((s) => `${s.category_id}:${s.bed_config_id}`));
     const neededPairs = [];
     for (const c of categories) {
@@ -3090,15 +3160,20 @@ export class HotelService {
       beds.length > 0 &&
       neededPairs.some((pair) => pairsCovered.has(pair));
 
+    const operatorOk = features.owner_mode ? operators.length >= 1 : housekeepers.length >= 1;
     const checks = [
-      { id: "property", label: "Hotel profile", ok: Boolean(property) },
-      { id: "room_types", label: "At least one room type", ok: categories.length >= 1 },
-      { id: "beds", label: "At least one bed config", ok: beds.length >= 1 },
+      { id: "property", label: "Property profile", ok: Boolean(property) },
+      { id: "room_types", label: "At least one room / space type", ok: categories.length >= 1 },
+      { id: "beds", label: "At least one bed / layout config", ok: beds.length >= 1 },
       { id: "linen", label: "At least one linen item", ok: linenItems.length >= 1 },
-      { id: "standards", label: "Fitted standards for room types", ok: standardsCoverTypes },
-      { id: "rooms", label: "At least one active room", ok: rooms.length >= 1 },
+      { id: "standards", label: "What’s normally in the room", ok: standardsCoverTypes },
+      { id: "rooms", label: `At least one active ${spaces.replace(/s$/, "")}`, ok: rooms.length >= 1 },
       { id: "store", label: "Active linen store", ok: stores.length >= 1 },
-      { id: "housekeepers", label: "At least one housekeeper", ok: housekeepers.length >= 1 }
+      {
+        id: "operators",
+        label: features.owner_mode ? "Owner or staff ready" : "At least one housekeeper",
+        ok: operatorOk
+      }
     ];
     const ready = checks.every((c) => c.ok);
     return {
@@ -3111,7 +3186,8 @@ export class HotelService {
         standards: standards.length,
         rooms: rooms.length,
         stores: stores.length,
-        housekeepers: housekeepers.length
+        housekeepers: housekeepers.length,
+        operators: operators.length
       }
     };
   }
@@ -3125,11 +3201,14 @@ export class HotelService {
     const access = this.requireSuperadmin(identity, "");
     return this.withIdempotency(idempotencyKey, access, () => {
       const name = String(body.name || "").trim();
-      if (!name) throw new LinosError(400, "ERR-SETUP-001", "Hotel name is required.");
+      if (!name) throw new LinosError(400, "ERR-SETUP-001", "Property name is required.");
       const code = slugCode(body.code || name);
       if (this.store.find("properties", (p) => p.code === code)) {
         throw new LinosError(409, "ERR-SETUP-002", `Property code ${code} already exists.`);
       }
+      const propertyKind = normalizePropertyKind(body.property_kind || "hotel");
+      const propertyScale = normalizePropertyScale(body.property_scale || "small");
+      const features = normalizeFeatures(body.features, propertyScale, propertyKind);
       const property = this.store.insert("properties", {
         id: newId("prop"),
         code,
@@ -3142,14 +3221,19 @@ export class HotelService {
         address_line: String(body.address_line || "").trim() || null,
         allow_guest_pii_import: Boolean(body.allow_guest_pii_import),
         photo_retention_days: Number(body.photo_retention_days || 365),
-        location_model: "hotel_room_store_laundry"
+        location_model: "hotel_room_store_laundry",
+        subscription_plan: body.is_demo ? "demo" : "free",
+        subscription_status: "active",
+        property_kind: propertyKind,
+        property_scale: propertyScale,
+        features_json: features
       });
       this.audit(
         { ...access, property },
         "setup.property.create",
         "property",
         property.id,
-        { code, name }
+        { code, name, property_kind: propertyKind, property_scale: propertyScale }
       );
       return { ok: true, property: this.publicProperty(property), ...this.getSetupState(identity, property.id) };
     });
@@ -3158,6 +3242,7 @@ export class HotelService {
   updateSetupProperty(identity, propertyId, body = {}, idempotencyKey = "") {
     const access = this.requireSuperadmin(identity, propertyId || body.property_id);
     return this.withIdempotency(idempotencyKey, access, () => {
+      const current = access.property;
       const patch = {};
       if (body.name != null) patch.name = String(body.name).trim();
       if (body.timezone != null) patch.timezone = String(body.timezone).trim() || "Asia/Kuala_Lumpur";
@@ -3172,7 +3257,27 @@ export class HotelService {
       if (body.photo_retention_days !== undefined) {
         patch.photo_retention_days = Number(body.photo_retention_days || 365);
       }
-      if (patch.name === "") throw new LinosError(400, "ERR-SETUP-001", "Hotel name is required.");
+      if (body.property_kind !== undefined) {
+        patch.property_kind = normalizePropertyKind(body.property_kind);
+      }
+      if (body.property_scale !== undefined) {
+        patch.property_scale = normalizePropertyScale(body.property_scale);
+      }
+      const nextKind = patch.property_kind || normalizePropertyKind(current.property_kind);
+      const nextScale = patch.property_scale || normalizePropertyScale(current.property_scale || "small");
+      if (body.apply_scale_defaults) {
+        patch.features_json = defaultFeaturesFor(nextScale, nextKind);
+      } else if (body.features !== undefined) {
+        patch.features_json = normalizeFeatures(
+          { ...this.propertyFeatures(current), ...body.features },
+          nextScale,
+          nextKind
+        );
+      } else if (patch.property_scale || patch.property_kind) {
+        // Keep explicit features when scale/kind change unless defaults requested.
+        patch.features_json = normalizeFeatures(this.propertyFeatures(current), nextScale, nextKind);
+      }
+      if (patch.name === "") throw new LinosError(400, "ERR-SETUP-001", "Property name is required.");
       const property = this.store.update("properties", access.property.id, patch);
       this.audit(access, "setup.property.update", "property", property.id, { fields: Object.keys(patch) });
       return { ok: true, property: this.publicProperty(property), ...this.getSetupState(identity, property.id) };
@@ -3184,7 +3289,9 @@ export class HotelService {
     return this.withIdempotency(idempotencyKey, access, () => {
       const pid = access.property.id;
       let items = Array.isArray(body.room_types) ? body.room_types : null;
-      if (!items?.length && body.use_starters) items = [...SETUP_STARTER_ROOM_TYPES];
+      if (!items?.length && body.use_starters) {
+        items = [...startersForKind(access.property.property_kind).roomTypes];
+      }
       if (!items?.length) throw new LinosError(400, "ERR-SETUP-010", "Provide room_types or use_starters.");
 
       const saved = [];
@@ -3219,7 +3326,9 @@ export class HotelService {
     return this.withIdempotency(idempotencyKey, access, () => {
       const pid = access.property.id;
       let items = Array.isArray(body.beds) ? body.beds : null;
-      if (!items?.length && body.use_starters) items = [...SETUP_STARTER_BEDS];
+      if (!items?.length && body.use_starters) {
+        items = [...startersForKind(access.property.property_kind).beds];
+      }
       if (!items?.length) throw new LinosError(400, "ERR-SETUP-011", "Provide beds or use_starters.");
 
       const saved = [];
@@ -3252,7 +3361,9 @@ export class HotelService {
     return this.withIdempotency(idempotencyKey, access, () => {
       const pid = access.property.id;
       let items = Array.isArray(body.linen_items) ? body.linen_items : null;
-      if (!items?.length && body.use_starters) items = [...SETUP_STARTER_LINEN];
+      if (!items?.length && body.use_starters) {
+        items = [...startersForKind(access.property.property_kind).linenItems];
+      }
       if (!items?.length) throw new LinosError(400, "ERR-SETUP-012", "Provide linen_items or use_starters.");
 
       const saved = [];
@@ -3360,16 +3471,26 @@ export class HotelService {
       const pid = access.property.id;
       let planned;
       try {
-        planned = planBulkRooms({
-          floorFrom: body.floor_from,
-          floorTo: body.floor_to,
-          roomsPerFloor: body.rooms_per_floor,
-          defaultCategoryId: body.default_category_id,
-          defaultBedConfigId: body.default_bed_config_id,
-          floorOverrides: body.floor_overrides || []
-        });
+        if (body.mode === "simple" || body.simple) {
+          planned = planSimpleRooms({
+            roomCount: body.room_count,
+            floorNumber: body.floor_number ?? 1,
+            defaultCategoryId: body.default_category_id,
+            defaultBedConfigId: body.default_bed_config_id,
+            roomNames: body.room_names || []
+          });
+        } else {
+          planned = planBulkRooms({
+            floorFrom: body.floor_from,
+            floorTo: body.floor_to,
+            roomsPerFloor: body.rooms_per_floor,
+            defaultCategoryId: body.default_category_id,
+            defaultBedConfigId: body.default_bed_config_id,
+            floorOverrides: body.floor_overrides || []
+          });
+        }
       } catch (err) {
-        throw new LinosError(400, "ERR-SETUP-020", err.message || "Invalid bulk room plan.");
+        throw new LinosError(400, "ERR-SETUP-020", err.message || "Invalid room plan.");
       }
 
       const created = [];
@@ -3439,6 +3560,9 @@ export class HotelService {
     return this.withIdempotency(idempotencyKey, access, () => {
       const pid = access.property.id;
       const property = access.property;
+      const scaleDefaults = opsDefaultsForScale(property.property_scale || "small");
+      const ownerOnly =
+        body.owner_only != null ? Boolean(body.owner_only) : Boolean(scaleDefaults.owner_only);
       const storeName = String(body.store_name || "Main Linen Store").trim();
       let storeLoc = this.store.find("stores", (s) => s.property_id === pid && s.code === "MAIN");
       if (!storeLoc) {
@@ -3453,27 +3577,43 @@ export class HotelService {
         storeLoc = this.store.update("stores", storeLoc.id, { name: storeName, is_active: true });
       }
 
-      const laundryName = String(body.laundry_name || "Laundry Partner").trim();
+      const partnerType = normalizeLaundryPartnerType(
+        body.partner_type ?? body.laundry_partner_type ?? scaleDefaults.partner_type
+      );
+      const defaultLaundryName =
+        partnerType === "aerosparkle"
+          ? "AeroSparkle"
+          : partnerType === "none"
+            ? "No laundry partner"
+            : "Laundry Partner";
+      const laundryName = String(body.laundry_name || defaultLaundryName).trim();
+      const externalRef = String(body.external_ref || body.aerosparkle_ref || "").trim() || null;
+      const laundryPatch = {
+        name: laundryName,
+        is_active: true,
+        partner_type: partnerType,
+        external_ref: partnerType === "none" ? null : externalRef,
+        config_json: body.laundry_config && typeof body.laundry_config === "object" ? body.laundry_config : {}
+      };
       let laundry = this.store.find("laundry_providers", (p) => p.property_id === pid && p.code === "MAIN");
       if (!laundry) {
         laundry = this.store.insert("laundry_providers", {
           id: newId("lp"),
           property_id: pid,
           code: "MAIN",
-          name: laundryName,
           standard_turnaround_hours: 24,
           express_turnaround_hours: 8,
-          is_active: true
+          ...laundryPatch
         });
-      } else if (body.laundry_name) {
-        laundry = this.store.update("laundry_providers", laundry.id, { name: laundryName, is_active: true });
+      } else {
+        laundry = this.store.update("laundry_providers", laundry.id, laundryPatch);
       }
 
       const exceptions = insertStarterExceptions(this.store, pid);
       const rules = insertStarterRules(this.store, pid);
 
       const linenItems = this.store.list("linen_items", (i) => i.property_id === pid && i.is_active);
-      const storeStock = Number(body.store_stock_per_item ?? 500);
+      const storeStock = Number(body.store_stock_per_item ?? scaleDefaults.store_stock_per_item);
       for (const item of linenItems) {
         this.store.adjustStock({
           property_id: pid,
@@ -3492,8 +3632,16 @@ export class HotelService {
         )
       ].sort((a, b) => a - b);
 
-      const hkCount = Math.max(0, Math.min(80, Number(body.housekeeper_count ?? 8)));
-      const svCount = Math.max(0, Math.min(20, Number(body.supervisor_count ?? 2)));
+      const hkCount = Math.max(
+        0,
+        Math.min(80, Number(body.housekeeper_count ?? (ownerOnly ? 0 : scaleDefaults.housekeeper_count)))
+      );
+      const svCount = Math.max(
+        0,
+        Math.min(20, Number(body.supervisor_count ?? (ownerOnly ? 0 : scaleDefaults.supervisor_count)))
+      );
+      const createSupportRoles =
+        body.create_support_roles != null ? Boolean(body.create_support_roles) : !ownerOnly;
       const hkBands = singleFloorDefaults(floors.length ? floors : [1], Math.max(hkCount, 1));
       const svBands = splitFloorsAcrossStaff(floors.length ? floors : [1], Math.max(svCount, 1));
 
@@ -3558,28 +3706,45 @@ export class HotelService {
         }
       }
 
-      for (const role of ["store", "porter"]) {
-        const email = setupStaffEmail(property.code, role, 1);
-        if (!this.store.find("users", (u) => u.email === email)) {
-          createdUsers.push(
-            this.store.insert("users", {
-              id: newId("user"),
-              property_id: pid,
-              email,
-              display_name: role === "store" ? "Store Agent" : "Porter",
-              role_name: role === "store" ? ROLES.STORE_AGENT : ROLES.PORTER,
-              is_active: true,
-              is_admin: false,
-              is_superadmin: false
-            })
-          );
+      if (createSupportRoles) {
+        for (const role of ["store", "porter"]) {
+          const email = setupStaffEmail(property.code, role, 1);
+          if (!this.store.find("users", (u) => u.email === email)) {
+            createdUsers.push(
+              this.store.insert("users", {
+                id: newId("user"),
+                property_id: pid,
+                email,
+                display_name: role === "store" ? "Store Agent" : "Porter",
+                role_name: role === "store" ? ROLES.STORE_AGENT : ROLES.PORTER,
+                is_active: true,
+                is_admin: false,
+                is_superadmin: false
+              })
+            );
+          }
         }
       }
+
+      const currentFeatures = this.propertyFeatures(property);
+      const nextFeatures = normalizeFeatures(
+        {
+          ...currentFeatures,
+          owner_mode: ownerOnly || (hkCount === 0 && svCount === 0),
+          team_mode: !ownerOnly && (hkCount > 0 || svCount > 0 || currentFeatures.team_mode),
+          laundry_partner: partnerType !== "none"
+        },
+        property.property_scale || "small",
+        property.property_kind || "hotel"
+      );
+      this.store.update("properties", pid, { features_json: nextFeatures });
 
       this.audit(access, "setup.ops_bootstrap", "property", pid, {
         store_id: storeLoc.id,
         housekeepers: hkCount,
-        supervisors: svCount
+        supervisors: svCount,
+        owner_only: ownerOnly,
+        partner_type: partnerType
       });
       return {
         ok: true,
@@ -3588,9 +3753,55 @@ export class HotelService {
         exceptionCategories: exceptions,
         schedulingRules: rules,
         staff_created: createdUsers.length,
+        features: nextFeatures,
         ...this.getSetupState(identity, pid)
       };
     });
+  }
+
+  getLaundryPickupBrief(identity, propertyId) {
+    const access = this.resolveAccess(identity, propertyId);
+    if (
+      !hasCapability(access.capabilities, "transfer.view") &&
+      !hasCapability(access.capabilities, "admin.configure") &&
+      !access.user.is_superadmin
+    ) {
+      throw new LinosError(403, "ERR-AUTHZ-001", "Laundry brief requires transfer or admin access.");
+    }
+    const pid = access.property.id;
+    const laundry =
+      this.store.find("laundry_providers", (p) => p.property_id === pid && p.code === "MAIN") ||
+      this.store.list("laundry_providers", (p) => p.property_id === pid)[0] ||
+      null;
+    const soiledAtStore = this.store
+      .list("stock_balances", (b) => b.property_id === pid && b.bucket === "SoiledAtStore")
+      .reduce((sum, row) => sum + Number(row.quantity || 0), 0);
+    const soiledAtRoom = this.store
+      .list("stock_balances", (b) => b.property_id === pid && b.bucket === "SoiledAtRoom")
+      .reduce((sum, row) => sum + Number(row.quantity || 0), 0);
+    const bookingUrl = process.env.AEROSPARKLE_BOOKING_URL || "https://aerosparkle.com/";
+    const summary = [
+      `Property: ${access.property.name}`,
+      access.property.address_line ? `Address: ${access.property.address_line}` : null,
+      `Soiled at store: ${soiledAtStore} pieces`,
+      `Soiled in rooms: ${soiledAtRoom} pieces`,
+      laundry?.partner_type === "aerosparkle" ? "Partner: AeroSparkle (optional)" : null,
+      laundry?.external_ref ? `Account ref: ${laundry.external_ref}` : null
+    ]
+      .filter(Boolean)
+      .join("\n");
+    return {
+      ok: true,
+      brief: {
+        partner_type: laundry?.partner_type || "none",
+        laundry_name: laundry?.name || null,
+        external_ref: laundry?.external_ref || null,
+        booking_url: bookingUrl,
+        soiled_at_store: soiledAtStore,
+        soiled_at_room: soiledAtRoom,
+        summary
+      }
+    };
   }
 
   handle(identity, method, path, body = {}, query = {}, headers = {}) {
@@ -3600,8 +3811,9 @@ export class HotelService {
     if (method === "GET" && path === "/session") return this.session(identity, propertyId);
     if (method === "GET" && path === "/bootstrap") return this.bootstrap(identity, propertyId);
     if (method === "GET" && path === "/setup/starters") {
-      this.requireSuperadmin(identity, propertyId);
-      return this.setupStarters();
+      const access = this.requireSuperadmin(identity, propertyId);
+      const kind = query.propertyKind || query.kind || access.property?.property_kind || "hotel";
+      return this.setupStarters(kind);
     }
     if (method === "GET" && path === "/setup/properties") return this.listSetupProperties(identity);
     if (method === "GET" && path === "/setup/state") return this.getSetupState(identity, propertyId);
@@ -3629,6 +3841,9 @@ export class HotelService {
     }
     if (method === "POST" && path === "/setup/ops-bootstrap") {
       return this.setupOpsBootstrap(identity, propertyId, body, idem);
+    }
+    if (method === "GET" && path === "/setup/laundry-brief") {
+      return this.getLaundryPickupBrief(identity, propertyId);
     }
     if (method === "GET" && path === "/master") {
       const access = this.resolveAccess(identity, propertyId);
