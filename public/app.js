@@ -46,15 +46,124 @@ const state = {
   loginEmailDraft: "",
   loginPasswordDraft: "",
   assignParams: {
-    rooms_per_housekeeper: null,
     prefer_default_floors: true,
-    keep_floor_clusters: true,
-    allow_soft_overfill: true,
-    max_floors_per_housekeeper: 2,
     amendments_notes: ""
   },
-  assignParamsSaved: false
+  assignParamsSaved: false,
+  setupRoomDraft: null,
+  setupEditingRoomId: null,
+  laundryBrief: null,
+  setupGuideDismissed: {},
+  setupGuideKey: null,
+  infoPopover: null
 };
+
+/** Layman explanations for info-icon popovers. */
+const HELP_TERMS = Object.freeze({
+  morning_board: {
+    title: "Morning board",
+    body: "Today’s list of rooms that need linen service. A Supervisor (or you, if you run the place yourself) marks which rooms are occupied, then activates the list so work can be assigned."
+  },
+  todays_rooms: {
+    title: "Today’s rooms",
+    body: "The simple name for your daily service list — which rooms need clean linen today. Same idea as a morning board, without the big-hotel wording."
+  },
+  assignment: {
+    title: "Assignment",
+    body: "Who cleans which rooms today. LINOS splits rooms evenly and prefers each housekeeper’s usual floor first. You can always change the list afterward."
+  },
+  my_rooms: {
+    title: "My rooms",
+    body: "The housekeeper’s (or owner’s) personal list of rooms to service — record what went out soiled, what went back clean, and any guest extras."
+  },
+  verification: {
+    title: "Verification",
+    body: "A Supervisor double-checks a finished room. Useful when you have a team; small owner-run places can leave this off."
+  },
+  linen_transfers: {
+    title: "Linen transfers",
+    body: "Moving counted soiled linen from rooms to your store (and later to laundry). Turn this on when you use porters or a linen store."
+  },
+  laundry_operations: {
+    title: "Laundry Operations",
+    body: "How dirty linen gets washed: in-house, via AeroSparkle, or another third party. You can change this later — it is not required to start."
+  },
+  fitted: {
+    title: "What’s normally in the room",
+    body: "The standard set of sheets, towels, and other pieces that belong in that room type. Guest extras are separate and never change this baseline."
+  },
+  float_buffer: {
+    title: "Float / buffer",
+    body: "Extra clean pieces on the cart that are not tied to a specific room — a small spare stash for the round."
+  },
+  soiled: {
+    title: "Soiled / service required",
+    body: "An occupied room that still needs today’s linen service. It stays marked until the housekeeper records the room, or until a follow-up is done."
+  },
+  extras: {
+    title: "Guest extras",
+    body: "Extra pillows, towels, or kits a guest asked for. These are tracked separately and never inflate the room’s normal fitted set."
+  },
+  cart: {
+    title: "Cart",
+    body: "The clean linen load prepared for a housekeeper’s rooms. Suggest = normal room needs + open extras; float is spare buffer."
+  },
+  housekeeper: {
+    title: "Housekeeper",
+    body: "The person who services guest rooms and records linen in and out. In a small property this may be you."
+  },
+  supervisor: {
+    title: "Supervisor",
+    body: "Runs the daily board, assigns rooms, and can verify finished work. On a small property the owner often wears this hat too."
+  },
+  hotel_setup: {
+    title: "Hotel setup",
+    body: "One-time wizard to describe your place, add rooms, choose laundry handling, and confirm you’re ready for daily ops. You can reopen it anytime to amend."
+  },
+  admin: {
+    title: "Admin",
+    body: "Day-to-day tweaks after setup — room details, what’s in each room, default floors, and growing into team features."
+  },
+  occupancy: {
+    title: "Occupancy",
+    body: "Which rooms have guests today. You confirm this on the morning board (no booking system link yet)."
+  },
+  owner_mode: {
+    title: "Owner mode",
+    body: "You run daily rooms yourself without a housekeeper team. You can invite staff later from Hotel setup or Admin."
+  }
+});
+
+const SETUP_GUIDES = Object.freeze({
+  profile: {
+    title: "Step guide: Your place",
+    body: "Tell us the basics — name, what kind of place you run, and size. This only shapes the starter defaults. You can change everything later."
+  },
+  types: {
+    title: "Step guide: Room types & beds",
+    body: "Room types (like Superior or Suite) and bed layouts decide the starter linen amounts. Use the starters if you’re unsure — you can fine-tune next."
+  },
+  catalogue: {
+    title: "Step guide: Linen catalogue",
+    body: "These are the sheet and towel pieces you track. Start with the pack we provide; add or rename items later in Admin if needed."
+  },
+  standards: {
+    title: "Step guide: What’s in the room",
+    body: "How many of each piece normally belong in each room type. Think “what the room should have when it’s ready for a guest.”"
+  },
+  rooms: {
+    title: "Step guide: Rooms",
+    body: "Add your rooms or units. Before we save them, you’ll confirm the linen amounts for that room type. Saved rooms appear at the bottom so you can amend or remove them."
+  },
+  ops: {
+    title: "Step guide: Team & laundry",
+    body: "Choose whether you run rooms yourself or add starter staff, and how laundry is handled (in-house, AeroSparkle, or another partner). Nothing here is permanent."
+  },
+  review: {
+    title: "Step guide: Confirm & go live",
+    body: "Check the summary, then confirm the overall setup. After that you can open today’s rooms list. You can amend setup anytime from Hotel setup or Admin."
+  }
+});
 
 const ROOM_FAMILY_ORDER = ["Superior", "Deluxe", "Premier Deluxe", "Club", "Suite", "Presidential"];
 
@@ -185,6 +294,68 @@ function firstFailingSetupStep(readiness, property = state.setupState?.property 
 
 function todayBoardLabel(property = state.session?.property) {
   return isSmallProperty(property) && !propertyFeatures(property).team_mode ? "Today’s rooms" : "Morning board";
+}
+
+function todayBoardHelpKey(property = state.session?.property) {
+  return isSmallProperty(property) && !propertyFeatures(property).team_mode ? "todays_rooms" : "morning_board";
+}
+
+function infoTip(termKey, label = "") {
+  const term = HELP_TERMS[termKey];
+  if (!term) return label;
+  const tip = `<button type="button" class="info-tip" data-info="${termKey}" aria-label="What is ${escapeAttr(
+    term.title
+  )}?" title="What is this?">i</button>`;
+  return label ? `<span class="with-info">${label}${tip}</span>` : tip;
+}
+
+function labeledInfo(label, termKey) {
+  return infoTip(termKey, label);
+}
+
+function renderInfoPopover() {
+  const key = state.infoPopover;
+  const term = key ? HELP_TERMS[key] : null;
+  if (!term) return "";
+  return `
+    <div class="help-overlay" id="info-popover-overlay" data-close-info="1">
+      <div class="help-card" role="dialog" aria-modal="true" aria-labelledby="info-popover-title">
+        <h3 id="info-popover-title">${escapeAttr(term.title)}</h3>
+        <p>${escapeAttr(term.body)}</p>
+        <div class="row"><button class="btn" type="button" id="info-popover-close">Got it</button></div>
+      </div>
+    </div>`;
+}
+
+function renderSetupGuideModal(stepKey) {
+  const guide = SETUP_GUIDES[stepKey];
+  if (!guide) return "";
+  if (state.setupGuideDismissed[stepKey]) return "";
+  if (state.setupGuideKey !== stepKey) return "";
+  return `
+    <div class="help-overlay" id="setup-guide-overlay">
+      <div class="help-card help-card-guide" role="dialog" aria-modal="true" aria-labelledby="setup-guide-title">
+        <p class="eyebrow">Quick guide</p>
+        <h3 id="setup-guide-title">${escapeAttr(guide.title)}</h3>
+        <p>${escapeAttr(guide.body)}</p>
+        <div class="row">
+          <button class="btn" type="button" id="setup-guide-continue" data-guide-key="${stepKey}">Continue</button>
+          <button class="btn secondary" type="button" id="setup-guide-skip-all">Skip all guides</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function openSetupGuideForStep(stepKey) {
+  if (!SETUP_GUIDES[stepKey]) {
+    state.setupGuideKey = null;
+    return;
+  }
+  if (state.setupGuideDismissed[stepKey] || state.setupGuideDismissed.__all) {
+    state.setupGuideKey = null;
+    return;
+  }
+  state.setupGuideKey = stepKey;
 }
 
 function escapeAttr(value) {
@@ -787,8 +958,8 @@ function renderTransfers() {
   const laundryPanel =
     features.laundry_partner || isSuperadmin()
       ? `<section class="panel">
-          <h2>Laundry partner</h2>
-          <p class="lede">AeroSparkle and other laundry partners are optional. Share a pickup brief, then confirm returns in LINOS.</p>
+          <h2>${labeledInfo("Laundry Operations", "laundry_operations")}</h2>
+          <p class="lede">In-house, AeroSparkle, or another 3rd party. Share a pickup brief when using an external service.</p>
           ${
             brief
               ? `<pre class="laundry-brief">${escapeAttr(brief.summary)}</pre>
@@ -809,8 +980,8 @@ function renderTransfers() {
   return `
     ${laundryPanel}
     <section class="panel">
-      <h2>Linen transfers</h2>
-      <p class="lede">Move counted soiled linen from rooms to the store, then reconcile receipt variances.</p>
+      <h2>${labeledInfo("Linen transfers", "linen_transfers")}</h2>
+      <p class="lede">Move counted ${labeledInfo("soiled", "soiled")} linen from rooms to the store, then reconcile receipt variances.</p>
       <div class="callout"><strong>Custody flow:</strong> Prepared → Collected → Received → Reconciled. Each collection line remains tied to its room and linen item.</div>
       ${
         canCollect && state.round?.id && stores.length
@@ -903,6 +1074,7 @@ function shell(content) {
           .join("")}
       </nav>
       <main class="main">${content}</main>
+      ${renderInfoPopover()}
     </div>
   `;
 }
@@ -950,7 +1122,10 @@ function renderDashboard() {
   return `
     <section class="panel">
       <h2>Operations dashboard</h2>
-      <p class="lede">Today’s room progress, verification pressure, and exception register.</p>
+      <p class="lede">Today’s room progress, ${labeledInfo("verification", "verification")} pressure, and exception register. Occupied rooms show ${labeledInfo(
+        "soiled / service required",
+        "soiled"
+      )} until recorded.</p>
       ${loadingNote}
       ${propertyDisclaimer()}
       ${dashboardSetupEmptyState()}
@@ -1198,7 +1373,10 @@ function morningBoardSummary(tasks = state.tasks || [], vacantHint = null) {
     estimated_linen_pieces: estPieces,
     unassigned,
     service_rooms: tasks.length,
-    planning_housekeepers_needed: Math.ceil(changeTasks / 15) || 0
+    planning_housekeepers_needed: changeTasks > 0 ? Math.min(changeTasks, Math.max(1, (state.master?.housekeepers || state.board?.available_housekeepers || 1))) : 0,
+    even_split_rooms: changeTasks > 0
+      ? Math.ceil(changeTasks / Math.max(1, state.master?.housekeepers?.length || state.board?.available_housekeepers || 1))
+      : 0
   };
 }
 
@@ -1257,8 +1435,8 @@ function renderRound() {
 
   return `
     <section class="panel">
-      <h2>Daily round — morning board ${round ? `<span class="badge ${isActive ? "ok" : "info"}">${round.status}</span>` : `<span class="badge">Opening…</span>`}</h2>
-      <p class="lede">07:00 AM linen workload${round ? ` for ${round.service_date}` : ""}. Guest names are not imported. Active means housekeepers can be assigned.</p>
+      <h2>Daily round — ${labeledInfo(todayBoardLabel(), todayBoardHelpKey())} ${round ? `<span class="badge ${isActive ? "ok" : "info"}">${round.status}</span>` : `<span class="badge">Opening…</span>`}</h2>
+      <p class="lede">07:00 AM linen workload${round ? ` for ${round.service_date}` : ""}. Guest names are not imported. Active means ${labeledInfo("housekeepers", "housekeeper")} can be assigned. ${infoTip("occupancy")}</p>
       ${propertyDisclaimer()}
       <ol class="step-strip">
         <li class="step ${steps.open}"><span>1</span> Open</li>
@@ -1454,18 +1632,21 @@ function renderAssign() {
   );
   const selected =
     assignBoardTasks(board).find((t) => t.id === state.selectedAssignTaskId) || null;
-  const activeAgents = (board.byAgent || []).filter((b) => b.room_count > 0 || board.unassigned.length);
-  const planning = board.planning_rooms_per_agent;
-  const suggestedRooms = board.suggested_rooms_per_housekeeper || 15;
   const suggestionRooms = board.assignment_workload_rooms ?? board.unassigned.length;
   const suggestionHousekeepers = board.available_housekeepers ?? (board.byAgent || []).length;
+  const evenSplit = board.even_split_target || (suggestionHousekeepers
+    ? Math.ceil(suggestionRooms / Math.max(1, suggestionHousekeepers))
+    : suggestionRooms);
   const params = state.assignParams || {};
   const paramsReady = Boolean(state.assignParamsSaved);
 
   return `
     <section class="panel">
-      <h2>Assignment board</h2>
-      <p class="lede">Set assignment parameters first, then run assignment. LINOS suggests a minimum of <strong>${suggestedRooms} rooms/housekeeper</strong> from ${suggestionRooms} rooms and ${suggestionHousekeepers} available housekeepers. You can change it; assignments may exceed the minimum. Manual assign/reassign remains available below.</p>
+      <h2>${labeledInfo("Assignment", "assignment")} board</h2>
+      <p class="lede">Rooms are split <strong>evenly</strong> (about <strong>${evenSplit}</strong> each across ${suggestionHousekeepers} ${labeledInfo(
+        "housekeepers",
+        "housekeeper"
+      )}) and each person is filled on their default floor first. Confirm below, then amend any assignments manually.</p>
       <div class="row">
         <button class="btn secondary" id="refresh-board">Refresh</button>
       </div>
@@ -1492,71 +1673,41 @@ function renderAssign() {
       </div>
     </section>
     <section class="panel assign-params-panel">
-      <h2>Assignment parameters</h2>
-      <p class="lede">Enter the proposed default and any rule amendments. Save parameters, then instruct the system to assign using those rules. One-click auto-assign is not available.</p>
+      <h2>Run assignment</h2>
+      <p class="lede">Even split · floor-first. Confirm preferences, run, then edit quantities or room assignments below.</p>
       <form id="assign-params-form" class="grid-2">
-        <label>Rooms per housekeeper (minimum)
-          <input name="rooms_per_housekeeper" type="number" min="1" max="80" required value="${
-            params.rooms_per_housekeeper ?? suggestedRooms ?? planning ?? 15
-          }" />
-          <span class="field-hint">Suggested minimum: ${suggestedRooms} (${suggestionRooms} rooms ÷ ${suggestionHousekeepers} available housekeepers). You may change it.</span>
-        </label>
-        <label>Max floors per housekeeper
-          <input name="max_floors_per_housekeeper" type="number" min="0" max="40" value="${
-            params.max_floors_per_housekeeper ?? 2
-          }" />
-          <span class="field-hint">0 = no limit</span>
-        </label>
         <label class="room-form-active span-2">
           <span class="room-form-check">
             <input name="prefer_default_floors" type="checkbox" ${
               params.prefer_default_floors !== false ? "checked" : ""
             } />
-            Prefer each housekeeper’s default floors
-          </span>
-        </label>
-        <label class="room-form-active span-2">
-          <span class="room-form-check">
-            <input name="keep_floor_clusters" type="checkbox" ${
-              params.keep_floor_clusters !== false ? "checked" : ""
-            } />
-            Keep rooms on the same floor clustered to one housekeeper where possible
-          </span>
-        </label>
-        <label class="room-form-active span-2">
-          <span class="room-form-check">
-            <input name="allow_soft_overfill" type="checkbox" ${
-              params.allow_soft_overfill !== false ? "checked" : ""
-            } />
-            Keep floor clusters together and allow assignments above the minimum (avoids tiny leftover blocks)
+            Prefer each housekeeper’s default floor first
           </span>
         </label>
         <label class="span-2">Amendments / notes for this run
-          <textarea name="amendments_notes" rows="2" placeholder="e.g. Floor 29 Club to HK 30–32; VIP suites stay with Supervisor A">${
+          <textarea name="amendments_notes" rows="2" placeholder="e.g. Keep VIP suites with Supervisor A">${
             params.amendments_notes || ""
           }</textarea>
         </label>
         <div class="row span-2">
-          <button class="btn" type="submit">Save parameters</button>
+          <button class="btn" type="submit">Confirm assignment settings</button>
           ${
             paramsReady
-              ? `<span class="badge ok">Parameters saved — ready to run</span>`
-              : `<span class="lede">Save parameters before running assignment.</span>`
+              ? `<span class="badge ok">Ready — about ${evenSplit} rooms each</span>`
+              : `<span class="lede">Confirm settings before running assignment.</span>`
           }
         </div>
       </form>
       <div class="assign-run-box">
         <p class="lede">${
           paramsReady
-            ? `Ready: minimum ${params.rooms_per_housekeeper} rooms/HK · default floors ${
+            ? `Ready: even split (~${evenSplit}/person) · default floors ${
                 params.prefer_default_floors !== false ? "on" : "off"
-              } · floor clusters ${params.keep_floor_clusters !== false ? "on" : "off"}${
-                params.amendments_notes ? ` · note: ${params.amendments_notes}` : ""
-              }`
-            : "Run is disabled until you save parameters above."
+              }${params.amendments_notes ? ` · note: ${params.amendments_notes}` : ""}`
+            : "Run is disabled until you confirm settings above."
         }</p>
         <button class="btn" type="button" id="run-assignment" ${paramsReady ? "" : "disabled"}>
-          Run assignment with these rules
+          Run even floor-first assignment
         </button>
       </div>
     </section>
@@ -1784,7 +1935,7 @@ function renderAgent() {
   const topUp = openExtrasNeedingTopUp();
   return `
     <section class="panel">
-      <h2>My rooms</h2>
+      <h2>${labeledInfo("My rooms", "my_rooms")}</h2>
       <p class="lede">Floor-optimised sequence, cart confirmation, and rapid linen entry.</p>
       <div class="row">
         <button class="btn" id="guest-request-open">Guest request</button>
@@ -1807,7 +1958,7 @@ function renderAgent() {
                   : ""
               }</h3>
               <table>
-                <thead><tr><th>Item</th><th>Suggested</th><th>Load</th><th>Float / buffer</th><th>Return unused</th></tr></thead>
+                <thead><tr><th>Item</th><th>Suggested</th><th>Load</th><th>${labeledInfo("Float / buffer", "float_buffer")}</th><th>Return unused</th></tr></thead>
                 <tbody>
                   ${state.cartSuggest.lines
                     .map(
@@ -2186,7 +2337,7 @@ function qtyCell(line, field, max = null) {
 function renderVerify() {
   return `
     <section class="panel">
-      <h2>Verification queue</h2>
+      <h2>${labeledInfo("Verification", "verification")} queue</h2>
       <p class="lede">Review counts and evidence. Guest claims remain a controlled separate process — LINOS never auto-charges.</p>
       <button class="btn secondary" id="refresh-queue">Refresh queue</button>
       <div class="stack" style="margin-top:1rem">
@@ -2405,7 +2556,7 @@ function renderAdmin() {
           <label class="room-form-check"><input type="checkbox" name="team_mode" ${features.team_mode ? "checked" : ""} /> Team mode (assignment + verification)</label>
           <label class="room-form-check"><input type="checkbox" name="floor_mode" ${features.floor_mode ? "checked" : ""} /> Floors &amp; carts</label>
           <label class="room-form-check"><input type="checkbox" name="custody_mode" ${features.custody_mode ? "checked" : ""} /> Store custody collections</label>
-          <label class="room-form-check"><input type="checkbox" name="laundry_partner" ${features.laundry_partner ? "checked" : ""} /> Laundry partner tools</label>
+          <label class="room-form-check"><input type="checkbox" name="laundry_partner" ${features.laundry_partner ? "checked" : ""} /> Laundry Operations (external)</label>
           <label class="room-form-check"><input type="checkbox" name="owner_mode" ${features.owner_mode ? "checked" : ""} /> Owner mode</label>
           <div class="row span-2"><button class="btn" type="submit">Save packs</button></div>
         </form>
@@ -2415,8 +2566,11 @@ function renderAdmin() {
   return `
     ${growPanel}
     <section class="panel hotel-config-panel">
-      <h2>Hotel configuration</h2>
-      <p class="lede">Rooms are stock points for clean linen replenishment. Click a room in the floor grid to change its room type and fitted linen.</p>
+      <h2>${labeledInfo("Admin", "admin")} · Hotel configuration</h2>
+      <p class="lede">Rooms are stock points for clean linen replenishment. Click a room in the floor grid to change its room type and ${labeledInfo(
+        "what’s normally in the room",
+        "fitted"
+      )}.</p>
       ${propertyDisclaimer()}
       <div class="grid-2" style="margin-top:1rem">
         <div class="stat"><strong>${rooms.length}</strong><span>Rooms</span></div>
@@ -2567,17 +2721,114 @@ function startDashboardPoll() {
   }, 50000);
 }
 
+function setupSavedRoomsHtml(s, spaces) {
+  const rooms = (s?.rooms || []).filter((r) => r.is_active !== false);
+  const cats = s?.roomCategories || [];
+  const beds = s?.bedConfigs || [];
+  const editingId = state.setupEditingRoomId;
+  if (!rooms.length) {
+    return `<div class="setup-saved-rooms"><h4>Saved ${spaces}</h4><p class="lede">None yet — add rooms above.</p></div>`;
+  }
+  const rows = rooms
+    .map((room) => {
+      if (editingId === room.id) {
+        const catOpts = cats
+          .map(
+            (c) =>
+              `<option value="${c.id}" ${c.id === room.category_id ? "selected" : ""}>${c.name}</option>`
+          )
+          .join("");
+        const bedOpts = beds
+          .map(
+            (b) =>
+              `<option value="${b.id}" ${b.id === room.bed_config_id ? "selected" : ""}>${b.name}</option>`
+          )
+          .join("");
+        return `<tr class="setup-room-edit-row"><td colspan="5">
+          <form class="grid-2 setup-amend-room-form" data-room-id="${room.id}">
+            <label>Number <input name="room_number" required value="${escapeAttr(room.room_number)}" /></label>
+            <label>Floor <input name="floor_number" type="number" min="1" required value="${room.floor_number}" /></label>
+            <label>Type <select name="category_id" required>${catOpts}</select></label>
+            <label>Bed / layout <select name="bed_config_id" required>${bedOpts}</select></label>
+            <div class="row span-2">
+              <button class="btn" type="submit">Save changes</button>
+              <button class="btn secondary" type="button" data-cancel-edit-room="${room.id}">Cancel</button>
+            </div>
+          </form>
+        </td></tr>`;
+      }
+      return `<tr>
+        <td>${escapeAttr(room.room_number)}</td>
+        <td>${room.floor_number}</td>
+        <td>${escapeAttr(room.category_name)}</td>
+        <td>${escapeAttr(room.bed_name)}</td>
+        <td class="row">
+          <button class="btn secondary" type="button" data-edit-room="${room.id}">Amend</button>
+          <button class="btn warn" type="button" data-remove-room="${room.id}">Remove</button>
+        </td>
+      </tr>`;
+    })
+    .join("");
+  return `
+    <div class="setup-saved-rooms">
+      <h4>Saved ${spaces} (${rooms.length})</h4>
+      <p class="lede">Amend or remove rooms below. Removed rooms are taken out of daily ops.</p>
+      <table class="setup-rooms-table">
+        <thead><tr><th>Room</th><th>Floor</th><th>Type</th><th>Bed / layout</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+}
+
+function setupLinenConfirmHtml(draft, s) {
+  if (!draft?.lines?.length) return "";
+  const catName =
+    (s?.roomCategories || []).find((c) => c.id === draft.category_id)?.name || "Room type";
+  const bedName = (s?.bedConfigs || []).find((b) => b.id === draft.bed_config_id)?.name || "Layout";
+  return `
+    <div class="setup-linen-confirm panel-inner">
+      <h4>Confirm what’s in the room</h4>
+      <p class="lede">Review and amend linen quantities for <strong>${escapeAttr(catName)}</strong> · ${escapeAttr(
+        bedName
+      )} before saving rooms.</p>
+      <form id="setup-linen-confirm-form">
+        <table class="setup-linen-matrix">
+          <thead><tr><th>Item</th><th>Qty</th></tr></thead>
+          <tbody>
+            ${draft.lines
+              .map(
+                (line) => `<tr>
+                  <td>${escapeAttr(line.name)} <span class="muted">${escapeAttr(line.code)}</span></td>
+                  <td><input name="qty_${line.linen_item_id}" type="number" min="0" max="40" required value="${
+                    line.quantity
+                  }" /></td>
+                </tr>`
+              )
+              .join("")}
+          </tbody>
+        </table>
+        <div class="row" style="margin-top:0.85rem">
+          <button class="btn" type="submit">Confirm linen &amp; save rooms</button>
+          <button class="btn secondary" type="button" id="setup-linen-confirm-cancel">Cancel</button>
+        </div>
+      </form>
+    </div>`;
+}
+
 function setupOpsFormHtml(s, small) {
   const ops = s?.opsDefaults || {};
   const laundry = s?.laundryProviders?.[0] || {};
-  const partnerType = laundry.partner_type || ops.partner_type || (small ? "none" : "manual");
+  const partnerType = laundry.partner_type || ops.partner_type || "in_house";
   const ownerOnly = small ? true : false;
+  const laundryName =
+    laundry.name ||
+    (partnerType === "aerosparkle" ? "AeroSparkle" : partnerType === "other" ? "Other 3rd party" : "In-house laundry");
   return `
       <h3>Team &amp; laundry</h3>
       <p class="lede">${
         small
-          ? "Owner-operated by default. Add housekeepers later when you grow. AeroSparkle is optional."
-          : "Creates the linen store, optional laundry partner, and starter staff with floors split evenly."
+          ? "Owner-operated by default. Add housekeepers later when you grow. Choose how laundry is handled."
+          : "Creates the linen store, laundry operations mode, and starter staff with one default floor each."
       }</p>
       <form id="setup-ops-form" class="grid-2">
         <label>Store name <input name="store_name" value="${s?.stores?.[0]?.name || "Main Linen Store"}" /></label>
@@ -2585,23 +2836,24 @@ function setupOpsFormHtml(s, small) {
           ops.store_stock_per_item ?? (small ? 40 : 500)
         }" /></label>
         <fieldset class="span-2 setup-partner-fieldset">
-          <legend>Laundry partner (optional)</legend>
-          <label class="room-form-check"><input type="radio" name="partner_type" value="none" ${
-            partnerType === "none" ? "checked" : ""
-          } /> None — handle laundry myself</label>
-          <label class="room-form-check"><input type="radio" name="partner_type" value="manual" ${
-            partnerType === "manual" || partnerType === "other" ? "checked" : ""
-          } /> Other / manual laundry</label>
+          <legend>${labeledInfo("Laundry Operations", "laundry_operations")}</legend>
+          <label class="room-form-check"><input type="radio" name="partner_type" value="in_house" ${
+            partnerType === "in_house" ? "checked" : ""
+          } /> In-house</label>
           <label class="room-form-check"><input type="radio" name="partner_type" value="aerosparkle" ${
             partnerType === "aerosparkle" ? "checked" : ""
-          } /> AeroSparkle (optional connect)</label>
+          } /> AeroSparkle</label>
+          <label class="room-form-check"><input type="radio" name="partner_type" value="other" ${
+            partnerType === "other" ? "checked" : ""
+          } /> Other 3rd party</label>
+          <div class="row" style="margin-top:0.5rem">
+            <button class="btn secondary" type="button" id="setup-connect-aerosparkle">Connect AeroSparkle</button>
+          </div>
         </fieldset>
-        <label>Partner display name <input name="laundry_name" value="${
-          laundry.name || (partnerType === "aerosparkle" ? "AeroSparkle" : small ? "No laundry partner" : "Laundry Partner")
-        }" /></label>
-        <label>AeroSparkle / account ref <input name="external_ref" value="${
+        <label>Display name <input name="laundry_name" value="${escapeAttr(laundryName)}" /></label>
+        <label>Account / site ref <input name="external_ref" value="${escapeAttr(
           laundry.external_ref || ""
-        }" placeholder="Optional link code" /></label>
+        )}" placeholder="For AeroSparkle or 3rd party" /></label>
         <label class="room-form-active span-2">Owner-operated
           <span class="room-form-check"><input name="owner_only" type="checkbox" ${
             ownerOnly ? "checked" : ""
@@ -2624,7 +2876,7 @@ function setupOpsFormHtml(s, small) {
       </p>`;
 }
 
-function setupReviewHtml(readiness, p) {
+function setupReviewHtml(readiness, p, s) {
   const checks = (readiness.checks || [])
     .map(
       (c) =>
@@ -2632,35 +2884,59 @@ function setupReviewHtml(readiness, p) {
     )
     .join("");
   const features = propertyFeatures(p);
+  const laundry = s?.laundryProviders?.[0];
+  const laundryLabel =
+    laundry?.partner_label ||
+    (features.laundry_partner ? "External laundry" : "In-house");
+  const confirmed = Boolean(p?.setup_confirmed);
+  const boardLabel = todayBoardLabel(p);
   return `
-      <h3>Review &amp; go live</h3>
-      <p class="lede">When every check passes, ${todayBoardLabel(p).toLowerCase()} and room service can run. Grow into team, floors, and custody packs anytime from Admin.</p>
+      <h3>Confirm &amp; go live ${infoTip("hotel_setup")}</h3>
+      <p class="lede">Check this summary, then confirm. You can amend any of it later from Hotel setup or Admin.</p>
       <ul class="setup-readiness">${checks}</ul>
+      <div class="setup-confirm-summary">
+        <h4>Your setup summary</h4>
+        <dl class="setup-summary-dl">
+          <div><dt>Place</dt><dd>${escapeAttr(p?.name || "—")} · ${escapeAttr(p?.property_kind || "hotel")} · ${escapeAttr(
+            p?.property_scale || "small"
+          )}</dd></div>
+          <div><dt>${escapeAttr(p?.space_label || "Rooms")}</dt><dd>${readiness.counts?.rooms || 0} active</dd></div>
+          <div><dt>Linen catalogue</dt><dd>${readiness.counts?.linen_items || 0} items · what’s normally in each room type is set</dd></div>
+          <div><dt>Team</dt><dd>${
+            features.owner_mode
+              ? "Owner-operated (you can add housekeepers later)"
+              : `${s?.housekeepersCount || 0} housekeepers · ${s?.supervisorsCount || 0} supervisors`
+          }</dd></div>
+          <div><dt>${labeledInfo("Laundry Operations", "laundry_operations")}</dt><dd>${escapeAttr(laundryLabel)}${
+            laundry?.external_ref ? ` · ref ${escapeAttr(laundry.external_ref)}` : ""
+          }</dd></div>
+          <div><dt>Next daily screen</dt><dd>${labeledInfo(boardLabel, todayBoardHelpKey(p))}</dd></div>
+        </dl>
+      </div>
       <div class="grid-3" style="margin-top:1rem">
         <div class="stat"><strong>${readiness.counts?.rooms || 0}</strong><span>${p?.space_label || "Rooms"}</span></div>
         <div class="stat"><strong>${readiness.counts?.operators || readiness.counts?.housekeepers || 0}</strong><span>Operators</span></div>
         <div class="stat"><strong>${readiness.counts?.linen_items || 0}</strong><span>Linen items</span></div>
       </div>
-      <div class="callout" style="margin-top:1rem">
-        <strong>Packs:</strong>
-        ${features.owner_mode ? "Owner mode · " : ""}
-        ${features.team_mode ? "Team · " : ""}
-        ${features.floor_mode ? "Floors/carts · " : ""}
-        ${features.custody_mode ? "Custody · " : ""}
-        ${features.laundry_partner ? "Laundry partner" : "No laundry partner"}
-      </div>
-      <div class="row" style="margin-top:1.25rem">
-        <button class="btn" type="button" id="setup-open-admin" ${readiness.ready ? "" : "disabled"}>
-          Open Admin to fine-tune
-        </button>
-        <button class="btn secondary" type="button" id="setup-open-morning" ${readiness.ready ? "" : "disabled"}>
-          Go to ${todayBoardLabel(p)}
-        </button>
-      </div>
       ${
         readiness.ready
-          ? `<p class="lede setup-ready-note">Ready for ops. Use Admin to enable team mode or connect AeroSparkle later.</p>`
-          : `<p class="lede">Complete the missing steps above, then return here.</p>`
+          ? confirmed
+            ? `<p class="lede setup-ready-note">Setup confirmed. You can still amend details anytime.</p>
+               <div class="row" style="margin-top:1.25rem">
+                 <button class="btn" type="button" id="setup-open-morning">Go to ${boardLabel}</button>
+                 <button class="btn secondary" type="button" id="setup-open-admin">Open Admin to fine-tune</button>
+               </div>`
+            : `<form id="setup-confirm-form" class="setup-confirm-form">
+                 <label class="room-form-check">
+                   <input name="confirm_setup" type="checkbox" required />
+                   I confirm this overall setup looks right. I know I can amend it later.
+                 </label>
+                 <div class="row">
+                   <button class="btn" type="submit" ${readiness.ready ? "" : "disabled"}>Confirm setup &amp; continue</button>
+                   <button class="btn secondary" type="button" id="setup-open-admin">Amend in Admin first</button>
+                 </div>
+               </form>`
+          : `<p class="lede">Complete the missing steps above, then return here to confirm.</p>`
       }`;
 }
 
@@ -2690,16 +2966,18 @@ function renderHotelSetup() {
 
   let body = "";
   const key = steps.find((st) => st.id === step)?.key || "profile";
+  openSetupGuideForStep(key);
 
   if (key === "profile") {
     const creating = state.setupForceCreate || !p;
     body = `
-      <h3>${small ? "Your place" : "Hotel profile"}</h3>
+      <h3>${small ? "Your place" : "Hotel profile"} ${infoTip("hotel_setup")}</h3>
       <p class="lede">${
         small
-          ? "Tell us what you run. Starter linen is ready — next you’ll add rooms and optionally a laundry partner."
+          ? "Tell us what you run. Starter linen is ready — next you’ll add rooms and choose laundry handling."
           : "Create a new property or update the profile you are configuring."
       }</p>
+      <button class="btn secondary setup-guide-again" type="button" data-show-guide="profile">Show step guide</button>
       <form id="setup-profile-form" class="grid-2">
         <label>Property name <input name="name" required value="${creating ? "" : p?.name || ""}" placeholder="e.g. Harbour View Inn" /></label>
         <label>Code <input name="code" value="${creating ? "" : p?.code || ""}" placeholder="Auto from name if blank" ${
@@ -2766,6 +3044,7 @@ function renderHotelSetup() {
     body = `
       <h3>Room types &amp; beds</h3>
       <p class="lede">Define the room types and bed configs used for what’s normally in the room.</p>
+      <button class="btn secondary setup-guide-again" type="button" data-show-guide="types">Show step guide</button>
       <div class="row" style="margin-bottom:1rem">
         <button class="btn" type="button" id="setup-apply-types-beds">Apply starter types &amp; beds</button>
       </div>
@@ -2789,6 +3068,7 @@ function renderHotelSetup() {
     body = `
       <h3>Linen catalogue</h3>
       <p class="lede">Core pieces for daily changeouts. Start from the starter pack, then refine later in Admin if needed.</p>
+      <button class="btn secondary setup-guide-again" type="button" data-show-guide="catalogue">Show step guide</button>
       <div class="row" style="margin-bottom:1rem">
         <button class="btn" type="button" id="setup-apply-linen">Apply starter linen catalogue</button>
       </div>
@@ -2798,8 +3078,9 @@ function renderHotelSetup() {
       }</ul>`;
   } else if (key === "standards") {
     body = `
-      <h3>What’s normally in the room</h3>
+      <h3>${labeledInfo("What’s normally in the room", "fitted")}</h3>
       <p class="lede">Quantities per room type × bed. Defaults scale Club/Suite higher than Superior.</p>
+      <button class="btn secondary setup-guide-again" type="button" data-show-guide="standards">Show step guide</button>
       <div class="row" style="margin-bottom:1rem">
         <button class="btn" type="button" id="setup-apply-standards">Generate default standards matrix</button>
       </div>
@@ -2807,29 +3088,38 @@ function renderHotelSetup() {
   } else if (key === "rooms") {
     const catOpts = cats.map((c) => `<option value="${c.id}">${c.name}</option>`).join("");
     const bedOpts = beds.map((b) => `<option value="${b.id}">${b.name}</option>`).join("");
+    const confirmBlock = setupLinenConfirmHtml(state.setupRoomDraft, s);
+    const savedBlock = setupSavedRoomsHtml(s, spaces);
     if (small) {
       body = `
       <h3>Add your ${spaces}</h3>
-      <p class="lede">Starter linen is already applied for ${kind}. Add a simple list of ${spaces} — no multi-floor builder required.</p>
+      <p class="lede">Choose type and layout, confirm linen quantities, then save. Saved ${spaces} appear at the bottom.</p>
       <div class="row" style="margin-bottom:1rem">
+        <button class="btn secondary setup-guide-again" type="button" data-show-guide="rooms">Show step guide</button>
         <button class="btn secondary" type="button" id="setup-ensure-starters">Refresh linen starters</button>
       </div>
-      <form id="setup-simple-rooms-form" class="grid-2">
+      ${
+        confirmBlock ||
+        `<form id="setup-simple-rooms-form" class="grid-2">
         <label>How many ${spaces}? <input name="room_count" type="number" min="1" max="80" required value="6" /></label>
         <label>Floor / level <input name="floor_number" type="number" min="1" required value="1" /></label>
         <label>Default type <select name="default_category_id" required>${catOpts}</select></label>
         <label>Default bed / layout <select name="default_bed_config_id" required>${bedOpts}</select></label>
         <label class="span-2">Optional names (comma-separated) <input name="room_names" placeholder="Garden, Pool, Suite 1" /></label>
         <div class="row span-2">
-          <button class="btn" type="submit" ${!cats.length || !beds.length ? "disabled" : ""}>Add ${spaces}</button>
+          <button class="btn" type="submit" ${!cats.length || !beds.length ? "disabled" : ""}>Continue to linen confirm</button>
         </div>
-      </form>
-      <p class="lede" style="margin-top:0.75rem">Active ${spaces}: <strong>${s?.roomsCount || 0}</strong></p>`;
+      </form>`
+      }
+      ${savedBlock}`;
     } else {
       body = `
       <h3>Bulk room builder</h3>
-      <p class="lede">Generate rooms as {floor}{01..N}. Existing room numbers are skipped. Fine-tune later in Admin.</p>
-      <form id="setup-bulk-rooms-form" class="grid-2">
+      <p class="lede">Generate rooms as {floor}{01..N}. Confirm linen for the selected type before saving. Existing numbers are skipped.</p>
+      <button class="btn secondary setup-guide-again" type="button" data-show-guide="rooms">Show step guide</button>
+      ${
+        confirmBlock ||
+        `<form id="setup-bulk-rooms-form" class="grid-2">
         <label>Floor from <input name="floor_from" type="number" min="1" required value="${
           scale === "large" ? 5 : 2
         }" /></label>
@@ -2842,17 +3132,18 @@ function renderHotelSetup() {
         <label>Default room type <select name="default_category_id" required>${catOpts}</select></label>
         <label>Default bed <select name="default_bed_config_id" required>${bedOpts}</select></label>
         <div class="row span-2">
-          <button class="btn" type="submit" ${!cats.length || !beds.length ? "disabled" : ""}>Generate rooms</button>
+          <button class="btn" type="submit" ${!cats.length || !beds.length ? "disabled" : ""}>Continue to linen confirm</button>
         </div>
-      </form>
-      <p class="lede" style="margin-top:0.75rem">Active rooms: <strong>${s?.roomsCount || 0}</strong>${
-        floors.length ? ` · Floors ${floors[0]}–${floors[floors.length - 1]}` : ""
-      }</p>`;
+      </form>`
+      }
+      ${savedBlock}`;
     }
   } else if (key === "ops") {
-    body = setupOpsFormHtml(s, small);
+    body = `${setupOpsFormHtml(s, small)}
+      <button class="btn secondary setup-guide-again" type="button" data-show-guide="ops" style="margin-top:0.75rem">Show step guide</button>`;
   } else {
-    body = setupReviewHtml(readiness, p);
+    body = `${setupReviewHtml(readiness, p, s)}
+      <button class="btn secondary setup-guide-again" type="button" data-show-guide="review" style="margin-top:0.75rem">Show step guide</button>`;
   }
 
   const canNext = step < steps.length;
@@ -2860,8 +3151,8 @@ function renderHotelSetup() {
 
   return `
     <section class="panel hotel-setup-panel">
-      <h2>Hotel setup</h2>
-      <p class="lede">Set up once for small hotels, spas, and hospitality — then grow into full hotel ops when you need them.</p>
+      <h2>${labeledInfo("Hotel setup", "hotel_setup")}</h2>
+      <p class="lede">Set up once for small hotels, spas, and hospitality — then grow into full hotel ops when you need them. Pop-up guides explain each step in plain language.</p>
       <div class="setup-rail" aria-label="Setup steps">${rail}</div>
       <div class="setup-body">${body}</div>
       <div class="setup-nav row">
@@ -2869,6 +3160,7 @@ function renderHotelSetup() {
         <button class="btn" type="button" id="setup-next" ${canNext ? "" : "disabled"}>Next</button>
       </div>
     </section>
+    ${renderSetupGuideModal(key)}
   `;
 }
 
@@ -3212,23 +3504,45 @@ function bindEvents() {
     }
   });
 
+  async function beginRoomLinenConfirm(createBody) {
+    const categoryId = createBody.default_category_id;
+    const bedId = createBody.default_bed_config_id;
+    const matrix = await api("/setup/linen-matrix", {
+      query: { category_id: categoryId, bed_config_id: bedId }
+    });
+    if (!(matrix.lines || []).some((line) => Number(line.quantity) > 0)) {
+      await api("/setup/standards", { method: "POST", body: { use_defaults: true, replace: false } });
+      const again = await api("/setup/linen-matrix", {
+        query: { category_id: categoryId, bed_config_id: bedId }
+      });
+      state.setupRoomDraft = {
+        createBody,
+        category_id: categoryId,
+        bed_config_id: bedId,
+        lines: again.lines || []
+      };
+    } else {
+      state.setupRoomDraft = {
+        createBody,
+        category_id: categoryId,
+        bed_config_id: bedId,
+        lines: matrix.lines || []
+      };
+    }
+    render();
+  }
+
   $("#setup-bulk-rooms-form")?.addEventListener("submit", async (e) => {
     e.preventDefault();
     try {
       const fd = new FormData(e.target);
-      const data = await api("/setup/rooms/bulk", {
-        method: "POST",
-        body: {
-          floor_from: Number(fd.get("floor_from")),
-          floor_to: Number(fd.get("floor_to")),
-          rooms_per_floor: Number(fd.get("rooms_per_floor")),
-          default_category_id: fd.get("default_category_id"),
-          default_bed_config_id: fd.get("default_bed_config_id")
-        }
+      await beginRoomLinenConfirm({
+        floor_from: Number(fd.get("floor_from")),
+        floor_to: Number(fd.get("floor_to")),
+        rooms_per_floor: Number(fd.get("rooms_per_floor")),
+        default_category_id: fd.get("default_category_id"),
+        default_bed_config_id: fd.get("default_bed_config_id")
       });
-      state.setupState = data;
-      toast(`Created ${data.created} rooms` + (data.skipped ? ` · skipped ${data.skipped}` : ""));
-      render();
     } catch (err) {
       toast(err.message, true);
     }
@@ -3266,19 +3580,173 @@ function bindEvents() {
         .split(",")
         .map((n) => n.trim())
         .filter(Boolean);
+      await beginRoomLinenConfirm({
+        mode: "simple",
+        room_count: Number(fd.get("room_count") || 6),
+        floor_number: Number(fd.get("floor_number") || 1),
+        default_category_id: fd.get("default_category_id") || state.setupState?.roomCategories?.[0]?.id,
+        default_bed_config_id: fd.get("default_bed_config_id") || state.setupState?.bedConfigs?.[0]?.id,
+        room_names: names
+      });
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
+
+  $("#setup-linen-confirm-cancel")?.addEventListener("click", () => {
+    state.setupRoomDraft = null;
+    render();
+  });
+
+  $("#setup-linen-confirm-form")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    try {
+      const draft = state.setupRoomDraft;
+      if (!draft?.createBody) throw new Error("Nothing to confirm.");
+      const fd = new FormData(e.target);
+      const standards = (draft.lines || []).map((line) => ({
+        category_id: draft.category_id,
+        bed_config_id: draft.bed_config_id,
+        linen_item_id: line.linen_item_id,
+        quantity: Number(fd.get(`qty_${line.linen_item_id}`) || 0)
+      }));
+      if (!standards.some((row) => row.quantity > 0)) {
+        throw new Error("Set at least one linen quantity greater than zero.");
+      }
+      await api("/setup/standards", {
+        method: "POST",
+        body: { standards, replace: false }
+      });
       const data = await api("/setup/rooms/bulk", {
         method: "POST",
-        body: {
-          mode: "simple",
-          room_count: Number(fd.get("room_count") || 6),
-          floor_number: Number(fd.get("floor_number") || 1),
-          default_category_id: fd.get("default_category_id") || state.setupState?.roomCategories?.[0]?.id,
-          default_bed_config_id: fd.get("default_bed_config_id") || state.setupState?.bedConfigs?.[0]?.id,
-          room_names: names
-        }
+        body: draft.createBody
       });
       state.setupState = data;
-      toast(`Added ${data.created} ${state.session?.property?.space_label || "rooms"}`);
+      state.setupRoomDraft = null;
+      toast(`Saved ${data.created} ${state.session?.property?.space_label || "rooms"}`);
+      render();
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
+
+  document.querySelectorAll("[data-edit-room]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.setupEditingRoomId = btn.getAttribute("data-edit-room");
+      render();
+    });
+  });
+  document.querySelectorAll("[data-cancel-edit-room]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.setupEditingRoomId = null;
+      render();
+    });
+  });
+  document.querySelectorAll(".setup-amend-room-form").forEach((form) => {
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      try {
+        const fd = new FormData(form);
+        const roomId = form.getAttribute("data-room-id");
+        const data = await api(`/setup/rooms/${roomId}`, {
+          method: "PATCH",
+          body: {
+            room_number: String(fd.get("room_number") || "").trim(),
+            floor_number: Number(fd.get("floor_number")),
+            category_id: fd.get("category_id"),
+            bed_config_id: fd.get("bed_config_id")
+          }
+        });
+        state.setupState = data;
+        state.setupEditingRoomId = null;
+        toast("Room updated");
+        render();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
+  });
+  document.querySelectorAll("[data-remove-room]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      try {
+        const roomId = btn.getAttribute("data-remove-room");
+        if (!window.confirm("Remove this room from active ops?")) return;
+        const data = await api(`/setup/rooms/${roomId}`, { method: "DELETE" });
+        state.setupState = data;
+        toast("Room removed");
+        render();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
+  });
+
+  $("#setup-connect-aerosparkle")?.addEventListener("click", () => {
+    const aerosparkle = document.querySelector('input[name="partner_type"][value="aerosparkle"]');
+    if (aerosparkle) aerosparkle.checked = true;
+    const nameInput = document.querySelector('#setup-ops-form input[name="laundry_name"]');
+    if (nameInput && !String(nameInput.value || "").trim()) nameInput.value = "AeroSparkle";
+    window.open("https://aerosparkle.com/", "_blank", "noopener");
+    toast("AeroSparkle selected — finish connect details, then save");
+  });
+
+  document.querySelectorAll("[data-info]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      state.infoPopover = btn.getAttribute("data-info");
+      render();
+    });
+  });
+  $("#info-popover-close")?.addEventListener("click", () => {
+    state.infoPopover = null;
+    render();
+  });
+  $("#info-popover-overlay")?.addEventListener("click", (e) => {
+    if (e.target?.dataset?.closeInfo) {
+      state.infoPopover = null;
+      render();
+    }
+  });
+
+  document.querySelectorAll("[data-show-guide]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const key = btn.getAttribute("data-show-guide");
+      if (!key) return;
+      delete state.setupGuideDismissed[key];
+      delete state.setupGuideDismissed.__all;
+      state.setupGuideKey = key;
+      render();
+    });
+  });
+  $("#setup-guide-continue")?.addEventListener("click", () => {
+    const key = $("#setup-guide-continue")?.getAttribute("data-guide-key");
+    if (key) state.setupGuideDismissed[key] = true;
+    state.setupGuideKey = null;
+    render();
+  });
+  $("#setup-guide-skip-all")?.addEventListener("click", () => {
+    state.setupGuideDismissed = { __all: true };
+    state.setupGuideKey = null;
+    render();
+  });
+
+  $("#setup-confirm-form")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    try {
+      const fd = new FormData(e.target);
+      if (fd.get("confirm_setup") !== "on") {
+        throw new Error("Tick the box to confirm your overall setup.");
+      }
+      const data = await api("/setup/property", {
+        method: "PATCH",
+        body: { setup_confirmed: true }
+      });
+      state.setupState = data;
+      if (state.session?.property && data.property) {
+        state.session.property = { ...state.session.property, ...data.property };
+      }
+      toast("Setup confirmed — you can amend it anytime");
       render();
     } catch (err) {
       toast(err.message, true);
@@ -3295,7 +3763,7 @@ function bindEvents() {
         body: {
           store_name: String(fd.get("store_name") || "").trim(),
           laundry_name: String(fd.get("laundry_name") || "").trim(),
-          partner_type: String(fd.get("partner_type") || "none"),
+          partner_type: String(fd.get("partner_type") || "in_house"),
           external_ref: String(fd.get("external_ref") || "").trim(),
           owner_only: ownerOnly,
           housekeeper_count: Number(fd.get("housekeeper_count") || 0),
@@ -3307,7 +3775,7 @@ function bindEvents() {
       if (state.session?.property && data.property) {
         state.session.property = { ...state.session.property, ...data.property };
       }
-      toast("Team & laundry saved");
+      toast("Team & laundry operations saved");
       state.setupStep = setupStepsFor(data.property || state.session?.property).length;
       render();
     } catch (err) {
@@ -3504,29 +3972,18 @@ function bindEvents() {
     e.preventDefault();
     const fd = new FormData(e.target);
     state.assignParams = {
-      rooms_per_housekeeper: Number(fd.get("rooms_per_housekeeper")),
-      max_floors_per_housekeeper: Number(fd.get("max_floors_per_housekeeper") || 0),
       prefer_default_floors: fd.get("prefer_default_floors") === "on",
-      keep_floor_clusters: fd.get("keep_floor_clusters") === "on",
-      allow_soft_overfill: fd.get("allow_soft_overfill") === "on",
       amendments_notes: String(fd.get("amendments_notes") || "").trim()
     };
-    if (
-      !Number.isInteger(state.assignParams.rooms_per_housekeeper) ||
-      state.assignParams.rooms_per_housekeeper < 1
-    ) {
-      toast("Enter a valid rooms-per-housekeeper value.", true);
-      return;
-    }
     state.assignParamsSaved = true;
-    toast("Assignment parameters saved — you can run assignment now");
+    toast("Assignment settings confirmed — you can run assignment now");
     render();
   });
 
   $("#run-assignment")?.addEventListener("click", async () => {
     try {
       if (!state.assignParamsSaved || !state.assignParams) {
-        throw new Error("Save assignment parameters first.");
+        throw new Error("Confirm assignment settings first.");
       }
       if (!state.round?.id) {
         const today = await api("/rounds/today");
@@ -3544,9 +4001,6 @@ function bindEvents() {
         }
       });
       state.board = data.board;
-      if (data.rules?.rooms_per_housekeeper) {
-        state.assignParams.rooms_per_housekeeper = data.rules.rooms_per_housekeeper;
-      }
       toast(data.message || (data.assigned ? `Assigned ${data.assigned} rooms` : "Assignment complete"));
       render();
     } catch (err) {

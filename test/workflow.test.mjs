@@ -5,7 +5,6 @@ import { HotelService } from "../src/core/service.mjs";
 import {
   parseCsv,
   assertNoGuestPiiHeaders,
-  DEFAULT_ROOMS_PER_AGENT,
   roleLabel,
   ROLES
 } from "../src/core/model.mjs";
@@ -21,16 +20,12 @@ function setup() {
   return { store, service, supervisor, agent1, agent2 };
 }
 
-/** Required params for rule-based assignment (replaces one-click auto-assign). */
+/** Confirm even floor-first assignment. */
 function assignmentRules(overrides = {}) {
   return {
     confirm: true,
     rules: {
-      rooms_per_housekeeper: DEFAULT_ROOMS_PER_AGENT,
       prefer_default_floors: true,
-      keep_floor_clusters: true,
-      allow_soft_overfill: true,
-      max_floors_per_housekeeper: 0,
       amendments_notes: "",
       confirm: true,
       ...overrides
@@ -149,7 +144,7 @@ test("full Phase 1 room flow: generate, assign, cart, service, verify", () => {
     ...assignmentRules()
   });
   assert.equal(assigned.board.unassigned.length, 0);
-  assert.equal(assigned.board.planning_rooms_per_agent, DEFAULT_ROOMS_PER_AGENT);
+  assert.ok(assigned.board.even_split_target >= 1);
 
   const agentWithRooms = assigned.board.byAgent.find((b) => b.room_count > 0);
   assert.ok(agentWithRooms);
@@ -272,7 +267,7 @@ test("agent cannot verify rooms", () => {
   );
 });
 
-test("minimum planning value does not block assignments above the minimum", () => {
+test("manual assign can give a housekeeper more rooms than the even-split target", () => {
   const { service, supervisor, agent1 } = setup();
   const generated = service.generateFromRules(supervisor, "", { rule_code: "STAYOVER" });
   const tasks = generated.tasks.slice(0, 18).map((t) => t.id);
@@ -285,14 +280,14 @@ test("minimum planning value does not block assignments above the minimum", () =
   assert.ok(result.board.byAgent.find((b) => b.agent.email === agent1.email).room_count >= 16);
 });
 
-test("assignment board suggests rooms per housekeeper from workload and available staff", () => {
+test("assignment board exposes even-split target from workload and available staff", () => {
   const { service, supervisor } = setup();
   const generated = service.generateFromRules(supervisor, "", { rule_code: "STAYOVER" });
   const board = service.assignmentBoard(service.resolveAccess(supervisor, ""), generated.round.id);
   assert.equal(board.assignment_workload_rooms, generated.tasks.length);
   assert.equal(board.available_housekeepers, 35);
   assert.equal(
-    board.suggested_rooms_per_housekeeper,
+    board.even_split_target,
     Math.ceil(generated.tasks.length / board.available_housekeepers)
   );
 });
@@ -792,7 +787,7 @@ function distinctAgentsOnFloor(board, floor) {
   return ids;
 }
 
-test("rule assignment: floor with ≤15 rooms goes to one housekeeper", () => {
+test("rule assignment: home-floor housekeeper gets that floor first", () => {
   const { service, supervisor, store } = setup();
   const rooms = store.list("rooms", (r) => r.floor_number === 5).slice(0, 12);
   assert.equal(rooms.length, 12);
@@ -807,13 +802,15 @@ test("rule assignment: floor with ≤15 rooms goes to one housekeeper", () => {
     ...assignmentRules()
   });
   assert.equal(assigned.board.unassigned.length, 0);
-  assert.equal(distinctAgentsOnFloor(assigned.board, 5).size, 1);
-  const agentId = [...distinctAgentsOnFloor(assigned.board, 5)][0];
-  const floors = service.defaultFloorsForUser(agentId);
-  assert.ok(floors.includes(5), "prefers housekeeper with floor 5 in default floors");
+  const homeOnFloor = assigned.board.byAgent.filter(
+    (b) =>
+      b.tasks.some((t) => t.room?.floor_number === 5) &&
+      service.defaultFloorsForUser(b.agent.id).includes(5)
+  );
+  assert.ok(homeOnFloor.length >= 1, "housekeeper with floor 5 default receives floor 5 work first");
 });
 
-test("rule assignment: large floor clusters into ~planning-sized HK blocks", () => {
+test("rule assignment: rooms split evenly across housekeepers", () => {
   const { service, supervisor, store } = setup();
   const rooms = store.list("rooms", (r) => r.floor_number === 29);
   assert.ok(rooms.length >= 25);
@@ -827,17 +824,13 @@ test("rule assignment: large floor clusters into ~planning-sized HK blocks", () 
     round_id: created.round.id,
     ...assignmentRules()
   });
-  const hkCount = distinctAgentsOnFloor(assigned.board, 29).size;
-  assert.ok(hkCount >= 2 && hkCount <= 3, `expected ~2 HKs for 25 rooms, got ${hkCount}`);
-  assert.ok(hkCount < 10, "must not spray floor across many housekeepers");
-
-  for (const bucket of assigned.board.byAgent.filter((b) => b.room_count > 0)) {
-    const floors = new Set(bucket.tasks.map((t) => t.room.floor_number));
-    assert.equal(floors.size, 1, "each active HK should be clustered on one floor in this round");
-    const roomNums = bucket.tasks.map((t) => t.room.room_number).sort();
-    const sorted = [...roomNums].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-    assert.deepEqual(roomNums.sort((a, b) => a.localeCompare(b, undefined, { numeric: true })), sorted);
-  }
+  const active = assigned.board.byAgent.filter((b) => b.room_count > 0);
+  assert.ok(active.length >= 1);
+  const counts = active.map((b) => b.room_count);
+  const max = Math.max(...counts);
+  const min = Math.min(...counts);
+  assert.ok(max - min <= 1, `counts should differ by at most 1, got ${counts.join(",")}`);
+  assert.equal(assigned.board.unassigned.length, 0);
 });
 
 test("rule assignment prefers default floors and updates after edit", () => {
@@ -1022,7 +1015,7 @@ test("free version registration creates a commercial hotel workspace", () => {
   assert.equal(store.raw.room_categories.length, 4);
   assert.equal(store.raw.rooms.length, 0);
   const laundry = store.find("laundry_providers", (p) => p.property_id === result.property.id);
-  assert.equal(laundry.partner_type, "none");
+  assert.equal(laundry.partner_type, "in_house");
   const readiness = service.computeSetupReadiness(result.property.id);
   assert.equal(readiness.ready, false);
   assert.ok(readiness.checks.some((c) => c.id === "rooms" && !c.ok));
@@ -1064,6 +1057,33 @@ test("small spa free version can go live with simple rooms and owner-only ops", 
   });
   const categoryId = state.roomCategories[0].id;
   const bedId = state.bedConfigs[0].id;
+  const matrix = service.handle(
+    identity,
+    "GET",
+    "/setup/linen-matrix",
+    {},
+    { propertyId, category_id: categoryId, bed_config_id: bedId },
+    { "x-linos-property-id": propertyId }
+  );
+  assert.ok(matrix.lines.length > 0);
+  const towel = matrix.lines.find((line) => line.code === "BT");
+  assert.ok(towel);
+  service.handle(
+    identity,
+    "POST",
+    "/setup/standards",
+    {
+      standards: matrix.lines.map((line) => ({
+        category_id: categoryId,
+        bed_config_id: bedId,
+        linen_item_id: line.linen_item_id,
+        quantity: line.code === "BT" ? 6 : line.quantity
+      })),
+      replace: false
+    },
+    { propertyId },
+    { "x-linos-property-id": propertyId }
+  );
   const rooms = service.handle(
     identity,
     "POST",
@@ -1080,6 +1100,28 @@ test("small spa free version can go live with simple rooms and owner-only ops", 
     { "x-linos-property-id": propertyId }
   );
   assert.equal(rooms.created, 4);
+  assert.equal(rooms.roomsCount, 4);
+  assert.equal(rooms.rooms.filter((r) => r.is_active).length, 4);
+
+  const amended = service.handle(
+    identity,
+    "PATCH",
+    `/setup/rooms/${rooms.rooms[0].id}`,
+    { room_number: "Lotus Suite", floor_number: 1 },
+    { propertyId },
+    { "x-linos-property-id": propertyId }
+  );
+  assert.equal(amended.rooms.find((r) => r.id === rooms.rooms[0].id).room_number, "Lotus Suite");
+
+  const removed = service.handle(
+    identity,
+    "DELETE",
+    `/setup/rooms/${rooms.rooms[1].id}`,
+    {},
+    { propertyId },
+    { "x-linos-property-id": propertyId }
+  );
+  assert.equal(removed.roomsCount, 3);
 
   const ops = service.handle(
     identity,
@@ -1109,6 +1151,31 @@ test("small spa free version can go live with simple rooms and owner-only ops", 
   });
   assert.match(brief.brief.summary, /Terata Spa/);
   assert.equal(brief.brief.partner_type, "aerosparkle");
+});
+
+test("setup confirmation is recorded on the property", () => {
+  const store = createMemoryStore();
+  const service = new HotelService(store);
+  const trial = service.createTrialAccount({
+    display_name: "Confirm Owner",
+    email: "confirm@harbour.example",
+    hotel_name: "Harbour Confirm",
+    password: "secure-pass-123",
+    password_confirmation: "secure-pass-123"
+  });
+  assert.equal(trial.property.setup_confirmed, false);
+  const identity = { email: "confirm@harbour.example", sub: "local:confirm@harbour.example" };
+  const propertyId = trial.property.id;
+  const confirmed = service.handle(
+    identity,
+    "PATCH",
+    "/setup/property",
+    { setup_confirmed: true },
+    { propertyId },
+    { "x-linos-property-id": propertyId }
+  );
+  assert.equal(confirmed.property.setup_confirmed, true);
+  assert.ok(confirmed.property.setup_confirmed_at);
 });
 
 test("scale packs can unlock team and custody features", () => {

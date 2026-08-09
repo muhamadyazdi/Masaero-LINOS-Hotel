@@ -7,7 +7,8 @@ import { newId, ROLES } from "./model.mjs";
 
 export const PROPERTY_KINDS = Object.freeze(["hotel", "boutique", "spa", "hosted", "other"]);
 export const PROPERTY_SCALES = Object.freeze(["small", "standard", "large"]);
-export const LAUNDRY_PARTNER_TYPES = Object.freeze(["none", "manual", "aerosparkle", "other"]);
+/** Canonical laundry operations modes. Legacy none→in_house, manual→other. */
+export const LAUNDRY_PARTNER_TYPES = Object.freeze(["in_house", "aerosparkle", "other"]);
 
 export const SETUP_STARTER_ROOM_TYPES = Object.freeze([
   { code: "SUP", name: "Superior", family: "Superior" },
@@ -101,8 +102,36 @@ export function normalizePropertyScale(value) {
 }
 
 export function normalizeLaundryPartnerType(value) {
-  const type = String(value || "none").trim().toLowerCase();
-  return LAUNDRY_PARTNER_TYPES.includes(type) ? type : "none";
+  const raw = String(value || "in_house").trim().toLowerCase();
+  if (raw === "none") return "in_house";
+  if (raw === "manual") return "other";
+  return LAUNDRY_PARTNER_TYPES.includes(raw) ? raw : "in_house";
+}
+
+export function laundryOperationsLabel(partnerType) {
+  const type = normalizeLaundryPartnerType(partnerType);
+  if (type === "aerosparkle") return "AeroSparkle";
+  if (type === "other") return "Other 3rd party";
+  return "In-house";
+}
+
+/** Build editable linen qty rows for a category × bed from catalogue + standards. */
+export function linenMatrixForCategoryBed(linenItems, standards, categoryId, bedConfigId) {
+  const byItem = new Map(
+    (standards || [])
+      .filter((s) => s.category_id === categoryId && s.bed_config_id === bedConfigId)
+      .map((s) => [s.linen_item_id, Number(s.quantity || 0)])
+  );
+  return (linenItems || [])
+    .filter((item) => item.is_active !== false)
+    .slice()
+    .sort((a, b) => (a.sort_order ?? 100) - (b.sort_order ?? 100))
+    .map((item) => ({
+      linen_item_id: item.id,
+      code: item.code,
+      name: item.name,
+      quantity: byItem.has(item.id) ? byItem.get(item.id) : 0
+    }));
 }
 
 export function defaultFeaturesFor(scale, kind = "hotel") {
@@ -201,7 +230,7 @@ export function opsDefaultsForScale(scale) {
       housekeeper_count: 8,
       supervisor_count: 2,
       store_stock_per_item: 500,
-      partner_type: "manual"
+      partner_type: "other"
     };
   }
   if (normalized === "standard") {
@@ -210,7 +239,7 @@ export function opsDefaultsForScale(scale) {
       housekeeper_count: 4,
       supervisor_count: 1,
       store_stock_per_item: 150,
-      partner_type: "manual"
+      partner_type: "in_house"
     };
   }
   return {
@@ -218,7 +247,7 @@ export function opsDefaultsForScale(scale) {
     housekeeper_count: 0,
     supervisor_count: 0,
     store_stock_per_item: 40,
-    partner_type: "none"
+    partner_type: "in_house"
   };
 }
 

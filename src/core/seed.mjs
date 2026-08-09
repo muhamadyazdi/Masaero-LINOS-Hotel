@@ -418,7 +418,7 @@ export function seedDemoProperty(store, { bootstrapEmail = "muhamadyazdi@gmail.c
     standard_turnaround_hours: 24,
     express_turnaround_hours: 8,
     is_active: true,
-    partner_type: "manual",
+    partner_type: "in_house",
     external_ref: null,
     config_json: {}
   });
