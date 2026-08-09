@@ -881,7 +881,7 @@ function renderFeedback() {
         </label>
         <button class="btn" type="submit">Send feedback</button>
       </form>
-      <p class="form-hint">Your message is sent to the Masaero product owner and tracked with the LINOS Hotel work queue.</p>
+      <p class="form-hint">Your message is sent to the Masaero product owner and, once workspace routing is enabled, tracked in the LINOS Hotel work queue.</p>
     </section>
   `;
 }
