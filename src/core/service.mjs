@@ -325,15 +325,10 @@ export class HotelService {
     const roomsDetailed = rooms.map((room) => {
       const category = categories.find((c) => c.id === room.category_id);
       const bed = beds.find((b) => b.id === room.bed_config_id);
-      const required_linen = this.requiredLinenForRoom(room);
-      const pars = this.store.list("room_par_levels", (p) => p.room_id === room.id);
       return {
         ...room,
         category,
-        bed_config: bed,
-        required_linen,
-        required_pieces: required_linen.reduce((sum, line) => sum + line.quantity, 0),
-        par_levels: pars
+        bed_config: bed
       };
     });
 
@@ -347,10 +342,6 @@ export class HotelService {
       linenItems: this.store.list("linen_items", (i) => i.property_id === pid && i.is_active),
       roomLinenStandards: this.store.list("room_linen_standards", (s) => s.property_id === pid),
       roomLinenRequirements: this.store.list("room_linen_requirements", (r) => r.property_id === pid),
-      roomParLevels: this.store.list("room_par_levels", () => true).filter((par) => {
-        const room = this.store.find("rooms", (r) => r.id === par.room_id);
-        return room?.property_id === pid;
-      }),
       stores: this.store.list("stores", (s) => s.property_id === pid && s.is_active),
       laundryProviders: this.store.list("laundry_providers", (p) => p.property_id === pid),
       amenityLocations: this.store.list("amenity_locations", (a) => a.property_id === pid),
@@ -370,7 +361,8 @@ export class HotelService {
         .map((u) => ({ ...this.publicUser(u), default_floors: this.defaultFloorsForUser(u.id) })),
       schedulingRules: this.store.list("scheduling_rules", (r) => r.property_id === pid && r.is_active),
       users: this.store.list("users", (u) => u.property_id === pid && u.is_active).map((u) => this.publicUser(u)),
-      stockBalances: this.store.list("stock_balances", (s) => s.property_id === pid)
+      // Stock detail is served by operational endpoints and the dashboard snapshot.
+      // Keeping the full per-room ledger out of bootstrap avoids oversized serverless responses.
     };
   }
 
@@ -2230,7 +2222,6 @@ export class HotelService {
         ...e,
         category: this.store.find("exception_categories", (c) => c.id === e.exception_category_id)
       })),
-      stock: this.store.list("stock_balances", (s) => s.property_id === access.property.id),
       roomLinenSnapshot: this.buildRoomLinenSnapshot(access, tasks)
     };
   }
