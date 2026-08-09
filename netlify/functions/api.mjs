@@ -134,8 +134,10 @@ export async function handler(event, context) {
 
     if (event.httpMethod === "POST" && path === "/auth/local") {
       const body = parseBody(event);
+      const propertyCountBefore = runtimeStore.list("properties").length;
       const result = getService().authenticateLocal(body.email, body.password);
-      await persistState();
+      // Only persist when demo seed ran; plain sign-in must stay fast on Netlify.
+      if (runtimeStore.list("properties").length !== propertyCountBefore) await persistState();
       return response(200, result);
     }
 
