@@ -1151,6 +1151,38 @@ button.linkish {
 .setup-readiness li.missing { border-color: rgba(161, 38, 34, 0.25); }
 .setup-ready-note { color: var(--ok); font-weight: 600; }
 .setup-nav { margin-top: 1.25rem; padding-top: 1rem; border-top: 1px solid var(--line); }
+.setup-partner-fieldset {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 0.75rem 1rem 1rem;
+  display: grid;
+  gap: 0.45rem;
+}
+.setup-partner-fieldset legend {
+  padding: 0 0.35rem;
+  font-weight: 600;
+}
+.setup-advanced {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 0.65rem 0.85rem;
+  background: #f8fbfc;
+}
+.setup-advanced summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.laundry-brief {
+  margin: 0.75rem 0 0;
+  padding: 0.85rem 1rem;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: #f7fafb;
+  white-space: pre-wrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
 
 @media (max-width: 860px) {
   .grid-2, .grid-3 { grid-template-columns: 1fr; }

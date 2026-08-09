@@ -49,6 +49,8 @@ test("starter workspace creates hotel-native topology", () => {
   const session = service.session({ email: "supervisor@linos.hotel" }, "");
   assert.equal(session.property.is_demo, true);
   assert.equal(session.property.subscription_plan, "demo");
+  assert.equal(session.property.property_scale, "large");
+  assert.equal(session.property.features.team_mode, true);
   assert.equal(session.property.location_model, "hotel_room_store_laundry");
   assert.match(session.property.demo_disclaimer, /Synthetic demonstration workspace/i);
   assert.match(session.property.positioning, /Masaero LINOS Hotel/i);
@@ -1012,14 +1014,19 @@ test("free version registration creates a commercial hotel workspace", () => {
   assert.equal(result.property.name, "Harbour View Hotel");
   assert.equal(result.property.is_demo, false);
   assert.equal(result.property.subscription_plan, "free");
+  assert.equal(result.property.property_scale, "small");
+  assert.equal(result.property.property_kind, "hotel");
+  assert.equal(result.property.features.owner_mode, true);
   assert.equal(result.plan.name, "Free Version");
   assert.equal(store.raw.users.length, 1);
   assert.equal(store.raw.room_categories.length, 4);
   assert.equal(store.raw.rooms.length, 0);
+  const laundry = store.find("laundry_providers", (p) => p.property_id === result.property.id);
+  assert.equal(laundry.partner_type, "none");
   const readiness = service.computeSetupReadiness(result.property.id);
   assert.equal(readiness.ready, false);
   assert.ok(readiness.checks.some((c) => c.id === "rooms" && !c.ok));
-  assert.ok(readiness.checks.some((c) => c.id === "housekeepers" && !c.ok));
+  assert.ok(readiness.checks.some((c) => c.id === "operators" && c.ok));
   assert.throws(
     () =>
       service.createTrialAccount({
@@ -1031,6 +1038,106 @@ test("free version registration creates a commercial hotel workspace", () => {
       }),
     /passwords do not match/i
   );
+});
+
+test("small spa free version can go live with simple rooms and owner-only ops", () => {
+  const store = createMemoryStore();
+  const service = new HotelService(store);
+  const trial = service.createTrialAccount({
+    display_name: "Sam Spa",
+    email: "sam@terata.example",
+    hotel_name: "Terata Spa",
+    property_kind: "spa",
+    property_scale: "small",
+    password: "secure-pass-123",
+    password_confirmation: "secure-pass-123"
+  });
+  assert.equal(trial.property.property_kind, "spa");
+  assert.ok(trial.property.space_label.includes("treatment"));
+  assert.ok(store.raw.room_categories.some((c) => c.code === "TRT"));
+  assert.ok(store.raw.amenity_locations.some((a) => a.code === "SPA" && a.is_active));
+
+  const identity = { email: "sam@terata.example", sub: "local:sam@terata.example" };
+  const propertyId = trial.property.id;
+  const state = service.handle(identity, "GET", "/setup/state", {}, { propertyId }, {
+    "x-linos-property-id": propertyId
+  });
+  const categoryId = state.roomCategories[0].id;
+  const bedId = state.bedConfigs[0].id;
+  const rooms = service.handle(
+    identity,
+    "POST",
+    "/setup/rooms/bulk",
+    {
+      mode: "simple",
+      room_count: 4,
+      floor_number: 1,
+      default_category_id: categoryId,
+      default_bed_config_id: bedId,
+      room_names: ["Lotus", "Orchid", "Bamboo", "Palm"]
+    },
+    { propertyId },
+    { "x-linos-property-id": propertyId }
+  );
+  assert.equal(rooms.created, 4);
+
+  const ops = service.handle(
+    identity,
+    "POST",
+    "/setup/ops-bootstrap",
+    {
+      owner_only: true,
+      partner_type: "aerosparkle",
+      external_ref: "AS-TEST-1",
+      store_stock_per_item: 20
+    },
+    { propertyId },
+    { "x-linos-property-id": propertyId }
+  );
+  assert.equal(ops.laundry.partner_type, "aerosparkle");
+  assert.equal(ops.features.owner_mode, true);
+  assert.equal(ops.features.laundry_partner, true);
+  assert.equal(ops.housekeepersCount, 0);
+
+  const ready = service.handle(identity, "GET", "/setup/readiness", {}, { propertyId }, {
+    "x-linos-property-id": propertyId
+  });
+  assert.equal(ready.readiness.ready, true);
+
+  const brief = service.handle(identity, "GET", "/setup/laundry-brief", {}, { propertyId }, {
+    "x-linos-property-id": propertyId
+  });
+  assert.match(brief.brief.summary, /Terata Spa/);
+  assert.equal(brief.brief.partner_type, "aerosparkle");
+});
+
+test("scale packs can unlock team and custody features", () => {
+  const store = createMemoryStore();
+  const service = new HotelService(store);
+  const trial = service.createTrialAccount({
+    display_name: "Grow Owner",
+    email: "grow@harbour.example",
+    hotel_name: "Harbour Grow",
+    password: "secure-pass-123",
+    password_confirmation: "secure-pass-123"
+  });
+  const identity = { email: "grow@harbour.example", sub: "local:grow@harbour.example" };
+  const propertyId = trial.property.id;
+  const updated = service.handle(
+    identity,
+    "PATCH",
+    "/setup/property",
+    {
+      property_scale: "standard",
+      apply_scale_defaults: true
+    },
+    { propertyId },
+    { "x-linos-property-id": propertyId }
+  );
+  assert.equal(updated.property.property_scale, "standard");
+  assert.equal(updated.property.features.team_mode, true);
+  assert.equal(updated.property.features.floor_mode, true);
+  assert.equal(updated.property.features.owner_mode, false);
 });
 
 test("setup property list is scoped for free-version superadmins", () => {
