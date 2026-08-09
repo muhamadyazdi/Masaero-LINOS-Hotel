@@ -31,6 +31,8 @@ import {
   insertStarterExceptions,
   insertStarterRules,
   isSmallScale,
+  laundryOperationsLabel,
+  linenMatrixForCategoryBed,
   normalizeFeatures,
   normalizeLaundryPartnerType,
   normalizePropertyKind,
@@ -358,11 +360,11 @@ export class HotelService {
       id: newId("lp"),
       property_id: property.id,
       code: "MAIN",
-      name: "No laundry partner",
+      name: "In-house laundry",
       standard_turnaround_hours: 24,
       express_turnaround_hours: 8,
       is_active: true,
-      partner_type: "none",
+      partner_type: "in_house",
       external_ref: null,
       config_json: {}
     });
@@ -1186,7 +1188,7 @@ export class HotelService {
       estimated_linen_pieces: estPieces,
       unassigned,
       service_rooms: tasks.length,
-      planning_housekeepers_needed: Math.ceil(changeTasks / DEFAULT_ROOMS_PER_AGENT) || 0
+      planning_housekeepers_needed: changeTasks > 0 ? 1 : 0
     };
   }
 
@@ -1272,7 +1274,6 @@ export class HotelService {
         default_floors,
         room_count: agentTasks.length,
         estimated_linen_pieces: agentTasks.reduce((sum, t) => sum + Number(t.estimated_linen_pieces || 0), 0),
-        under_minimum_default: agentTasks.length > 0 && agentTasks.length < (round?.planning_rooms_per_agent || DEFAULT_ROOMS_PER_AGENT),
         tasks: agentTasks
       };
     });
@@ -1287,14 +1288,13 @@ export class HotelService {
     const followUp = tasks.filter((task) => task.service_required && task.status !== "Verified");
     const unassigned = tasks.filter((task) => task.status === "Unassigned" && !task.assigned_agent_id);
     const availableHousekeepers = byAgent.length;
-    const suggestedRoomsPerHousekeeper = availableHousekeepers
+    const evenSplitTarget = availableHousekeepers
       ? Math.max(1, Math.ceil(unassigned.length / availableHousekeepers))
-      : DEFAULT_ROOMS_PER_AGENT;
+      : unassigned.length || 0;
 
     return {
       round,
-      planning_rooms_per_agent: round?.planning_rooms_per_agent || DEFAULT_ROOMS_PER_AGENT,
-      suggested_rooms_per_housekeeper: suggestedRoomsPerHousekeeper,
+      even_split_target: evenSplitTarget,
       assignment_workload_rooms: unassigned.length,
       available_housekeepers: availableHousekeepers,
       // Only Unassigned work is auto-assignable. Skipped (DND / no service) must stay out.
@@ -1351,126 +1351,34 @@ export class HotelService {
       this.audit(access, "task.assign", "user", agent.id, {
         taskIds,
         room_count: agentBucket?.room_count,
-        planning_default: board.planning_rooms_per_agent,
-        under_minimum: agentBucket?.under_minimum_default || false
+        even_split_target: board.even_split_target
       });
       return {
         ok: true,
         updated,
-        warning: agentBucket?.under_minimum_default
-          ? `Housekeeper has ${agentBucket.room_count} rooms, below the ${board.planning_rooms_per_agent}-room minimum planning value.`
-          : null,
+        warning: null,
         board
       };
     });
   }
 
   /**
-   * Parse and validate supervisor-entered assignment rules.
-   * One-click assignment is not allowed — rules.confirm must be true.
+   * Parse assignment options. Confirm required; even floor-first split is the default.
    */
-  parseAssignmentRules(body = {}, round) {
+  parseAssignmentRules(body = {}) {
     const raw = body.rules && typeof body.rules === "object" ? body.rules : body;
     if (!raw.confirm && !body.confirm) {
       throw new LinosError(
         400,
         "ERR-TASK-010",
-        "Set assignment parameters and confirm before running assignment."
+        "Confirm assignment before running. Rooms are split evenly, floor-first."
       );
-    }
-    const planning = Number(raw.rooms_per_housekeeper ?? raw.planning_rooms_per_agent);
-    if (!Number.isInteger(planning) || planning < 1 || planning > 80) {
-      throw new LinosError(
-        400,
-        "ERR-TASK-011",
-        "rooms_per_housekeeper is required (integer 1–80)."
-      );
-    }
-    const maxFloors = Number(raw.max_floors_per_housekeeper ?? 0);
-    if (maxFloors !== 0 && (!Number.isInteger(maxFloors) || maxFloors < 1 || maxFloors > 40)) {
-      throw new LinosError(400, "ERR-TASK-012", "max_floors_per_housekeeper must be 0 (unlimited) or 1–40.");
     }
     return {
-      rooms_per_housekeeper: planning,
       prefer_default_floors: raw.prefer_default_floors !== false && raw.prefer_default_floors !== "false",
-      keep_floor_clusters: raw.keep_floor_clusters !== false && raw.keep_floor_clusters !== "false",
-      allow_soft_overfill: raw.allow_soft_overfill !== false && raw.allow_soft_overfill !== "false",
-      max_floors_per_housekeeper: maxFloors || 0,
       amendments_notes: String(raw.amendments_notes || "").trim().slice(0, 2000),
-      confirm: true,
-      round_default: round?.planning_rooms_per_agent || DEFAULT_ROOMS_PER_AGENT
+      confirm: true
     };
-  }
-
-  /**
-   * Split a floor's rooms into contiguous chunks sized around the minimum planning value.
-   */
-  chunkFloorTasksForAssignment(tasks, planning, { allowSoftOverfill = true, keepFloorClusters = true } = {}) {
-    const n = tasks.length;
-    if (n === 0) return [];
-    if (!keepFloorClusters) {
-      return tasks.map((t) => [t]);
-    }
-    const softSingle = allowSoftOverfill
-      ? planning + Math.max(2, Math.floor(planning / 5))
-      : planning;
-    if (n <= softSingle) return [tasks];
-    const chunks = [];
-    for (let i = 0; i < n; i += planning) {
-      chunks.push(tasks.slice(i, Math.min(i + planning, n)));
-    }
-    if (allowSoftOverfill && chunks.length >= 2) {
-      const last = chunks[chunks.length - 1];
-      if (last.length <= Math.floor(planning / 3)) {
-        const prev = chunks[chunks.length - 2];
-        chunks.splice(chunks.length - 2, 2, prev.concat(last));
-      }
-    }
-    return chunks;
-  }
-
-  pickAssignmentAgent(agents, floor, chunkSize, rules) {
-    const planning = rules.rooms_per_housekeeper;
-    let best = null;
-    let bestKey = null;
-    for (const agent of agents) {
-      if (
-        rules.max_floors_per_housekeeper > 0 &&
-        !agent.floorsWorking.has(floor) &&
-        agent.floorsWorking.size >= rules.max_floors_per_housekeeper
-      ) {
-        continue;
-      }
-      const banded = rules.prefer_default_floors && agent.bandedFloors.has(floor);
-      const onFloor = agent.floorsWorking.has(floor);
-      const nextCount = agent.room_count + chunkSize;
-      const under = agent.room_count < planning;
-      const fitsSoft = nextCount <= planning;
-      let tier;
-      if (banded && under && fitsSoft) tier = 0;
-      else if (banded && under) tier = 1;
-      else if (under && fitsSoft) tier = 2;
-      else if (under) tier = 3;
-      else if (banded && onFloor) tier = 4;
-      else if (onFloor) tier = 5;
-      else if (banded) tier = 6;
-      else tier = 7;
-      const key = [tier, agent.room_count, onFloor ? 0 : 1, agent.agent.email || agent.agent.id];
-      if (
-        !bestKey ||
-        key[0] < bestKey[0] ||
-        (key[0] === bestKey[0] && key[1] < bestKey[1]) ||
-        (key[0] === bestKey[0] && key[1] === bestKey[1] && key[2] < bestKey[2]) ||
-        (key[0] === bestKey[0] &&
-          key[1] === bestKey[1] &&
-          key[2] === bestKey[2] &&
-          String(key[3]) < String(bestKey[3]))
-      ) {
-        best = agent;
-        bestKey = key;
-      }
-    }
-    return best;
   }
 
   assignRuleChunk(agentState, chunk, floor) {
@@ -1483,12 +1391,14 @@ export class HotelService {
       });
     }
     agentState.room_count += chunk.length;
+    agentState.quotaRemaining = Math.max(0, (agentState.quotaRemaining || 0) - chunk.length);
     agentState.floorsWorking.add(floor);
   }
 
   /**
-   * Rule-based assignment. Requires supervisor-entered parameters (rules.confirm).
-   * Replaces one-click auto-assign.
+   * Even floor-first assignment.
+   * Each housekeeper (or owner when no HKs) gets roughly the same room count.
+   * Prefer each worker’s default floor first; spill only when that floor is exhausted / quota remains.
    */
   runAssignment(identity, propertyId, body = {}, idempotencyKey = "") {
     const access = this.resolveAccess(identity, propertyId);
@@ -1505,13 +1415,7 @@ export class HotelService {
       }
       const rules = this.parseAssignmentRules(body, round);
 
-      // Persist the minimum planning value chosen for this round.
-      this.store.update("daily_rounds", round.id, {
-        planning_rooms_per_agent: rules.rooms_per_housekeeper
-      });
-
       const board = this.assignmentBoard(access, round.id);
-      const planning = rules.rooms_per_housekeeper;
       const pendingCount = board.unassigned.length;
       if (!pendingCount) {
         return {
@@ -1523,7 +1427,29 @@ export class HotelService {
         };
       }
 
-      const agents = board.byAgent.map((b) => {
+      let agentBuckets = board.byAgent;
+      if (!agentBuckets.length) {
+        const features = this.propertyFeatures(access.property);
+        const owners = this.store.list(
+          "users",
+          (u) =>
+            u.property_id === access.property.id &&
+            u.is_active &&
+            (u.is_superadmin || u.is_admin || u.role_name === ROLES.SUPERADMIN)
+        );
+        if (features.owner_mode && owners.length) {
+          agentBuckets = owners.map((owner) => ({
+            agent: this.publicUser(owner),
+            room_count: 0,
+            tasks: []
+          }));
+        }
+      }
+      if (!agentBuckets.length) {
+        throw new LinosError(400, "ERR-TASK-002", "No housekeepers available. Add staff or enable owner mode.");
+      }
+
+      const agents = agentBuckets.map((b) => {
         const bandedFloors = new Set(
           this.store
             .list("user_floor_assignments", (a) => a.user_id === b.agent.id)
@@ -1532,14 +1458,33 @@ export class HotelService {
         const floorsWorking = new Set(
           b.tasks.map((t) => t.room?.floor_number).filter((f) => f != null && f !== undefined)
         );
+        const homeFloor =
+          rules.prefer_default_floors && bandedFloors.size
+            ? [...bandedFloors].sort((a, b) => a - b)[0]
+            : null;
         return {
           agent: b.agent,
           room_count: b.room_count,
           bandedFloors,
-          floorsWorking
+          floorsWorking,
+          homeFloor,
+          quotaRemaining: 0
         };
       });
-      if (!agents.length) throw new LinosError(400, "ERR-TASK-002", "No housekeepers available.");
+
+      const alreadyAssigned = agents.reduce((sum, a) => sum + a.room_count, 0);
+      const totalAfter = alreadyAssigned + pendingCount;
+      const base = Math.floor(totalAfter / agents.length);
+      const rem = totalAfter % agents.length;
+      agents.forEach((agent, index) => {
+        const target = base + (index < rem ? 1 : 0);
+        agent.quotaRemaining = Math.max(0, target - agent.room_count);
+      });
+
+      const evenTarget = Math.ceil(totalAfter / agents.length);
+      this.store.update("daily_rounds", round.id, {
+        planning_rooms_per_agent: evenTarget
+      });
 
       const byFloor = new Map();
       for (const task of board.unassigned) {
@@ -1547,51 +1492,77 @@ export class HotelService {
         if (!byFloor.has(floor)) byFloor.set(floor, []);
         byFloor.get(floor).push(task);
       }
-      for (const tasks of byFloor.values()) {
-        tasks.sort((a, b) => String(a.room?.room_number || "").localeCompare(String(b.room?.room_number || "")));
+      for (const floorTasks of byFloor.values()) {
+        floorTasks.sort((a, b) =>
+          String(a.room?.room_number || "").localeCompare(String(b.room?.room_number || ""))
+        );
       }
+
+      const pickEvenAgent = (floor, { homeOnly = false } = {}) => {
+        const candidates = agents.filter((a) => {
+          if (a.quotaRemaining <= 0) return false;
+          if (homeOnly) {
+            return a.homeFloor === floor || a.bandedFloors.has(floor);
+          }
+          return true;
+        });
+        if (!candidates.length) return null;
+        candidates.sort((a, b) => {
+          const aHome = a.homeFloor === floor || a.bandedFloors.has(floor) ? 0 : 1;
+          const bHome = b.homeFloor === floor || b.bandedFloors.has(floor) ? 0 : 1;
+          const aOn = a.floorsWorking.has(floor) ? 0 : 1;
+          const bOn = b.floorsWorking.has(floor) ? 0 : 1;
+          return (
+            aHome - bHome ||
+            aOn - bOn ||
+            a.room_count - b.room_count ||
+            String(a.agent.email || "").localeCompare(String(b.agent.email || ""))
+          );
+        });
+        return candidates[0];
+      };
 
       let assigned = 0;
       for (const floor of [...byFloor.keys()].sort((a, b) => a - b)) {
         let remaining = byFloor.get(floor);
 
+        // Pass A: keep each housekeeper on their home / default floor first.
         while (remaining.length) {
-          const fillers = agents
-            .filter((a) => a.floorsWorking.has(floor) && a.room_count < planning)
-            .sort(
-              (a, b) =>
-                b.room_count - a.room_count || String(a.agent.email).localeCompare(String(b.agent.email))
-            );
-          if (!fillers.length) break;
-          const chosen = fillers[0];
-          const take = Math.min(remaining.length, planning - chosen.room_count);
+          const chosen = pickEvenAgent(floor, { homeOnly: true });
+          if (!chosen) break;
+          const take = Math.min(remaining.length, chosen.quotaRemaining);
           const chunk = remaining.slice(0, take);
           remaining = remaining.slice(take);
           this.assignRuleChunk(chosen, chunk, floor);
           assigned += chunk.length;
         }
 
-        for (const chunk of this.chunkFloorTasksForAssignment(remaining, planning, {
-          allowSoftOverfill: rules.allow_soft_overfill,
-          keepFloorClusters: rules.keep_floor_clusters
-        })) {
-          const chosen = this.pickAssignmentAgent(agents, floor, chunk.length, rules);
+        // Pass B: spill leftover rooms on this floor to anyone still under even quota.
+        while (remaining.length) {
+          const chosen = pickEvenAgent(floor, { homeOnly: false });
           if (!chosen) break;
+          const take = Math.min(remaining.length, chosen.quotaRemaining);
+          const chunk = remaining.slice(0, take);
+          remaining = remaining.slice(take);
           this.assignRuleChunk(chosen, chunk, floor);
           assigned += chunk.length;
         }
+
+        byFloor.set(floor, remaining);
       }
 
       this.audit(access, "task.rule_assign", "daily_round", round.id, {
         assigned,
-        rules
+        rules,
+        even_split_target: evenTarget
       });
       return {
         ok: true,
         assigned,
         rules,
+        even_split_target: evenTarget,
         message: assigned
-          ? `Assigned ${assigned} room${assigned === 1 ? "" : "s"} using your rules (minimum ${planning}/HK; assignments may exceed it).`
+          ? `Assigned ${assigned} room${assigned === 1 ? "" : "s"} evenly (about ${evenTarget} per housekeeper), floor-first. You can amend assignments below.`
           : "No rooms were assigned.",
         board: this.assignmentBoard(access, round.id)
       };
@@ -3088,9 +3059,32 @@ export class HotelService {
       .list("linen_items", (i) => i.property_id === pid)
       .sort((a, b) => (a.sort_order ?? 100) - (b.sort_order ?? 100));
     const standards = this.store.list("room_linen_standards", (s) => s.property_id === pid);
-    const rooms = this.store.list("rooms", (r) => r.property_id === pid && r.is_active);
+    const rooms = this.store
+      .list("rooms", (r) => r.property_id === pid)
+      .sort(
+        (a, b) =>
+          Number(a.floor_number) - Number(b.floor_number) ||
+          String(a.room_number).localeCompare(String(b.room_number))
+      );
+    const activeRooms = rooms.filter((r) => r.is_active);
+    const catById = new Map(categories.map((c) => [c.id, c]));
+    const bedById = new Map(beds.map((b) => [b.id, b]));
+    const roomRows = rooms.map((r) => ({
+      id: r.id,
+      room_number: r.room_number,
+      floor_number: r.floor_number,
+      category_id: r.category_id,
+      bed_config_id: r.bed_config_id,
+      category_name: catById.get(r.category_id)?.name || "—",
+      bed_name: bedById.get(r.bed_config_id)?.name || "—",
+      is_active: r.is_active !== false
+    }));
     const stores = this.store.list("stores", (s) => s.property_id === pid && s.is_active);
-    const laundry = this.store.list("laundry_providers", (p) => p.property_id === pid);
+    const laundry = this.store.list("laundry_providers", (p) => p.property_id === pid).map((row) => ({
+      ...row,
+      partner_type: normalizeLaundryPartnerType(row.partner_type),
+      partner_label: laundryOperationsLabel(row.partner_type)
+    }));
     const housekeepers = this.store.list(
       "users",
       (u) => u.property_id === pid && u.role_name === ROLES.STATION_AGENT && u.is_active
@@ -3109,8 +3103,9 @@ export class HotelService {
       bedConfigs: beds,
       linenItems,
       roomLinenStandards: standards,
-      roomsCount: rooms.length,
-      floors: [...new Set(rooms.map((r) => r.floor_number))].sort((a, b) => a - b),
+      rooms: roomRows,
+      roomsCount: activeRooms.length,
+      floors: [...new Set(activeRooms.map((r) => r.floor_number))].sort((a, b) => a - b),
       stores,
       laundryProviders: laundry,
       housekeepersCount: housekeepers.length,
@@ -3580,19 +3575,14 @@ export class HotelService {
       const partnerType = normalizeLaundryPartnerType(
         body.partner_type ?? body.laundry_partner_type ?? scaleDefaults.partner_type
       );
-      const defaultLaundryName =
-        partnerType === "aerosparkle"
-          ? "AeroSparkle"
-          : partnerType === "none"
-            ? "No laundry partner"
-            : "Laundry Partner";
+      const defaultLaundryName = laundryOperationsLabel(partnerType);
       const laundryName = String(body.laundry_name || defaultLaundryName).trim();
       const externalRef = String(body.external_ref || body.aerosparkle_ref || "").trim() || null;
       const laundryPatch = {
         name: laundryName,
         is_active: true,
         partner_type: partnerType,
-        external_ref: partnerType === "none" ? null : externalRef,
+        external_ref: partnerType === "in_house" ? null : externalRef,
         config_json: body.laundry_config && typeof body.laundry_config === "object" ? body.laundry_config : {}
       };
       let laundry = this.store.find("laundry_providers", (p) => p.property_id === pid && p.code === "MAIN");
@@ -3732,7 +3722,7 @@ export class HotelService {
           ...currentFeatures,
           owner_mode: ownerOnly || (hkCount === 0 && svCount === 0),
           team_mode: !ownerOnly && (hkCount > 0 || svCount > 0 || currentFeatures.team_mode),
-          laundry_partner: partnerType !== "none"
+          laundry_partner: partnerType !== "in_house"
         },
         property.property_scale || "small",
         property.property_kind || "hotel"
@@ -3785,15 +3775,18 @@ export class HotelService {
       access.property.address_line ? `Address: ${access.property.address_line}` : null,
       `Soiled at store: ${soiledAtStore} pieces`,
       `Soiled in rooms: ${soiledAtRoom} pieces`,
-      laundry?.partner_type === "aerosparkle" ? "Partner: AeroSparkle (optional)" : null,
+      laundry?.partner_type === "aerosparkle" ? "Laundry operations: AeroSparkle" : null,
+      laundry?.partner_type === "other" ? "Laundry operations: Other 3rd party" : null,
       laundry?.external_ref ? `Account ref: ${laundry.external_ref}` : null
     ]
       .filter(Boolean)
       .join("\n");
+    const partnerType = normalizeLaundryPartnerType(laundry?.partner_type || "in_house");
     return {
       ok: true,
       brief: {
-        partner_type: laundry?.partner_type || "none",
+        partner_type: partnerType,
+        partner_label: laundryOperationsLabel(partnerType),
         laundry_name: laundry?.name || null,
         external_ref: laundry?.external_ref || null,
         booking_url: bookingUrl,
@@ -3801,6 +3794,145 @@ export class HotelService {
         soiled_at_room: soiledAtRoom,
         summary
       }
+    };
+  }
+
+  updateSetupRoom(identity, propertyId, roomId, body = {}, idempotencyKey = "") {
+    const access = this.requireSuperadmin(identity, propertyId || body.property_id);
+    return this.withIdempotency(idempotencyKey, access, () => {
+      const pid = access.property.id;
+      const room = this.store.find("rooms", (r) => r.id === roomId && r.property_id === pid);
+      if (!room) throw new LinosError(404, "ERR-SETUP-030", "Room not found.");
+      const patch = {};
+      if (body.room_number != null) {
+        const roomNumber = String(body.room_number).trim();
+        if (!roomNumber) throw new LinosError(400, "ERR-SETUP-031", "Room number is required.");
+        const clash = this.store.find(
+          "rooms",
+          (r) => r.property_id === pid && r.room_number === roomNumber && r.id !== room.id
+        );
+        if (clash) throw new LinosError(409, "ERR-SETUP-032", `Room ${roomNumber} already exists.`);
+        patch.room_number = roomNumber;
+      }
+      if (body.floor_number != null) {
+        const floor = Number(body.floor_number);
+        if (!Number.isInteger(floor) || floor < 1) {
+          throw new LinosError(400, "ERR-SETUP-033", "floor_number must be an integer >= 1.");
+        }
+        patch.floor_number = floor;
+      }
+      if (body.category_id != null) {
+        const category = this.store.find(
+          "room_categories",
+          (c) => c.id === body.category_id && c.property_id === pid
+        );
+        if (!category) throw new LinosError(400, "ERR-SETUP-034", "Invalid room type.");
+        patch.category_id = category.id;
+      }
+      if (body.bed_config_id != null) {
+        const bed = this.store.find(
+          "bed_configs",
+          (b) => b.id === body.bed_config_id && b.property_id === pid
+        );
+        if (!bed) throw new LinosError(400, "ERR-SETUP-035", "Invalid bed / layout.");
+        patch.bed_config_id = bed.id;
+      }
+      if (body.is_active !== undefined) patch.is_active = Boolean(body.is_active);
+
+      const categoryChanged =
+        (patch.category_id && patch.category_id !== room.category_id) ||
+        (patch.bed_config_id && patch.bed_config_id !== room.bed_config_id);
+      if (categoryChanged) {
+        const used = this.store.find(
+          "room_tasks",
+          (t) => t.room_id === room.id && ["Submitted", "Verified", "InProgress"].includes(t.status)
+        );
+        if (used) {
+          throw new LinosError(
+            409,
+            "ERR-SETUP-036",
+            "This room already has service history. Change fitted linen in Admin instead."
+          );
+        }
+      }
+
+      const updated = this.store.update("rooms", room.id, patch);
+      if (categoryChanged) {
+        this.store.remove("room_linen_requirements", (req) => req.room_id === room.id);
+        const nextCategoryId = updated.category_id;
+        const nextBedId = updated.bed_config_id;
+        const standards = this.store.list(
+          "room_linen_standards",
+          (s) => s.category_id === nextCategoryId && s.bed_config_id === nextBedId
+        );
+        for (const standard of standards) {
+          const fittedQty = Number(standard.quantity || 0);
+          const par = fittedQty * 2;
+          storeOrSkipPar(this.store, room.id, standard.linen_item_id, par);
+          const installed = this.store.find(
+            "stock_balances",
+            (b) =>
+              b.property_id === pid &&
+              b.room_id === room.id &&
+              b.linen_item_id === standard.linen_item_id &&
+              b.bucket === "InstalledInRoom"
+          );
+          const cleanAtRoom = this.store.find(
+            "stock_balances",
+            (b) =>
+              b.property_id === pid &&
+              b.room_id === room.id &&
+              b.linen_item_id === standard.linen_item_id &&
+              b.bucket === "CleanAtRoom"
+          );
+          const installedDelta = fittedQty - Number(installed?.quantity || 0);
+          const cleanDelta = par - Number(cleanAtRoom?.quantity || 0);
+          if (installedDelta) {
+            this.store.adjustStock({
+              property_id: pid,
+              linen_item_id: standard.linen_item_id,
+              bucket: "InstalledInRoom",
+              room_id: room.id,
+              delta: installedDelta
+            });
+          }
+          if (cleanDelta) {
+            this.store.adjustStock({
+              property_id: pid,
+              linen_item_id: standard.linen_item_id,
+              bucket: "CleanAtRoom",
+              room_id: room.id,
+              delta: cleanDelta
+            });
+          }
+        }
+      }
+      this.audit(access, "setup.room.update", "room", room.id, { fields: Object.keys(patch) });
+      return { ok: true, room: updated, ...this.getSetupState(identity, pid) };
+    });
+  }
+
+  deactivateSetupRoom(identity, propertyId, roomId, idempotencyKey = "") {
+    return this.updateSetupRoom(identity, propertyId, roomId, { is_active: false }, idempotencyKey);
+  }
+
+  getSetupLinenMatrix(identity, propertyId, query = {}) {
+    const access = this.requireSuperadmin(identity, propertyId);
+    const pid = access.property.id;
+    const categoryId = query.categoryId || query.category_id || "";
+    const bedConfigId = query.bedConfigId || query.bed_config_id || "";
+    if (!categoryId || !bedConfigId) {
+      throw new LinosError(400, "ERR-SETUP-040", "category_id and bed_config_id are required.");
+    }
+    const linenItems = this.store
+      .list("linen_items", (i) => i.property_id === pid && i.is_active)
+      .sort((a, b) => (a.sort_order ?? 100) - (b.sort_order ?? 100));
+    const standards = this.store.list("room_linen_standards", (s) => s.property_id === pid);
+    return {
+      ok: true,
+      category_id: categoryId,
+      bed_config_id: bedConfigId,
+      lines: linenMatrixForCategoryBed(linenItems, standards, categoryId, bedConfigId)
     };
   }
 
@@ -3838,6 +3970,15 @@ export class HotelService {
     }
     if (method === "POST" && path === "/setup/rooms/bulk") {
       return this.bulkCreateSetupRooms(identity, propertyId, body, idem);
+    }
+    if (method === "PATCH" && path.startsWith("/setup/rooms/")) {
+      return this.updateSetupRoom(identity, propertyId, path.split("/")[3], body, idem);
+    }
+    if (method === "DELETE" && path.startsWith("/setup/rooms/")) {
+      return this.deactivateSetupRoom(identity, propertyId, path.split("/")[3], idem);
+    }
+    if (method === "GET" && path === "/setup/linen-matrix") {
+      return this.getSetupLinenMatrix(identity, propertyId, query);
     }
     if (method === "POST" && path === "/setup/ops-bootstrap") {
       return this.setupOpsBootstrap(identity, propertyId, body, idem);
