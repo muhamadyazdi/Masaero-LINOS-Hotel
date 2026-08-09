@@ -56,6 +56,16 @@ export function createMemoryStore() {
     laundry_return_allocations: [],
     variances: []
   };
+  const stockIndex = new Map();
+
+  function rebuildStockIndex() {
+    stockIndex.clear();
+    for (const row of db.stock_balances) stockIndex.set(locKey(row), row);
+  }
+
+  function ensureStockIndex() {
+    if (stockIndex.size !== db.stock_balances.length) rebuildStockIndex();
+  }
 
   function table(name) {
     if (!db[name]) throw new Error(`Unknown table ${name}`);
@@ -79,6 +89,10 @@ export function createMemoryStore() {
       if (!record.id) record.id = newId(name.slice(0, 3));
       if (!record.created_at) record.created_at = nowIso();
       table(name).push(record);
+      if (name === "stock_balances") {
+        ensureStockIndex();
+        stockIndex.set(locKey(record), record);
+      }
       return clone(record);
     },
 
@@ -100,6 +114,7 @@ export function createMemoryStore() {
       for (let i = rows.length - 1; i >= 0; i -= 1) {
         if (predicate(rows[i])) rows.splice(i, 1);
       }
+      if (name === "stock_balances") rebuildStockIndex();
     },
 
     adjustStock({
@@ -113,6 +128,7 @@ export function createMemoryStore() {
       delta
     }) {
       const rows = table("stock_balances");
+      ensureStockIndex();
       const target = {
         property_id,
         linen_item_id,
@@ -123,7 +139,7 @@ export function createMemoryStore() {
         cart_load_id: cart_load_id || null
       };
       const key = locKey(target);
-      let row = rows.find((entry) => locKey(entry) === key);
+      let row = stockIndex.get(key);
       if (!row) {
         row = {
           id: newId("stk"),
@@ -132,6 +148,7 @@ export function createMemoryStore() {
           updated_at: nowIso()
         };
         rows.push(row);
+        stockIndex.set(key, row);
       }
       row.quantity += Number(delta || 0);
       row.updated_at = nowIso();
