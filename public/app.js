@@ -42,6 +42,9 @@ const state = {
   authMode: "login",
   authBusy: false,
   dashboardLoading: false,
+  demoPickerOpen: false,
+  loginEmailDraft: "",
+  loginPasswordDraft: "",
   assignParams: {
     rooms_per_housekeeper: null,
     prefer_default_floors: true,
@@ -110,6 +113,38 @@ const SETUP_STEPS = [
   { id: 6, key: "ops", label: "Store & staff" },
   { id: 7, key: "review", label: "Review & go live" }
 ];
+
+const DEMO_LOGIN_USERS = [
+  { email: "muhamadyazdi@gmail.com", label: "Platform Superadmin" },
+  { email: "supervisor@linos.hotel", label: "Supervisor A (Lead)" },
+  { email: "agent1@linos.hotel", label: "Housekeeper 01" },
+  { email: "porter@linos.hotel", label: "Porter" },
+  { email: "store@linos.hotel", label: "Store Agent" }
+];
+
+const READINESS_STEP_BY_CHECK = {
+  property: 1,
+  room_types: 2,
+  beds: 2,
+  linen: 3,
+  standards: 4,
+  rooms: 5,
+  store: 6,
+  housekeepers: 6
+};
+
+function firstFailingSetupStep(readiness) {
+  const failing = (readiness?.checks || []).find((check) => !check.ok);
+  if (!failing) return 7;
+  return READINESS_STEP_BY_CHECK[failing.id] || 1;
+}
+
+function escapeAttr(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;");
+}
 
 function isSuperadmin() {
   return Boolean(state.session?.user?.is_superadmin) || can("*");
@@ -379,6 +414,10 @@ async function login(email, password = "") {
   const data = await api("/auth/local", { method: "POST", body: { email, password } });
   state.token = data.token;
   localStorage.setItem("linos_hotel_token", state.token);
+  state.authBusy = false;
+  state.demoPickerOpen = false;
+  state.loginEmailDraft = "";
+  state.loginPasswordDraft = "";
   await bootstrap();
 }
 
@@ -393,18 +432,39 @@ async function refreshDashboard({ soft = false } = {}) {
 }
 
 async function registerTrial(body) {
-  const data = await api("/auth/register", { method: "POST", body });
-  state.token = data.token;
-  localStorage.setItem("linos_hotel_token", state.token);
-  state.activePropertyId = data.session?.property?.id || data.property?.id || "";
-  if (state.activePropertyId) localStorage.setItem("linos_hotel_property_id", state.activePropertyId);
-  await bootstrap();
-  state.view = "hotel-setup";
-  await loadSetupState();
-  render();
+  try {
+    const data = await api("/auth/register", { method: "POST", body });
+    state.token = data.token;
+    localStorage.setItem("linos_hotel_token", state.token);
+    state.activePropertyId = data.session?.property?.id || data.property?.id || "";
+    if (state.activePropertyId) localStorage.setItem("linos_hotel_property_id", state.activePropertyId);
+    await bootstrap({ preferSetup: true });
+  } finally {
+    state.authBusy = false;
+  }
 }
 
-async function bootstrap() {
+async function applySetupLanding({ preferSetup = false } = {}) {
+  if (!isSuperadmin()) return false;
+  try {
+    const data = await loadSetupState();
+    const readiness = data?.readiness;
+    if (preferSetup || (readiness && !readiness.ready)) {
+      state.view = "hotel-setup";
+      state.setupStep = firstFailingSetupStep(readiness);
+      return true;
+    }
+  } catch {
+    if (preferSetup) {
+      state.view = "hotel-setup";
+      state.setupStep = 1;
+      return true;
+    }
+  }
+  return false;
+}
+
+async function bootstrap({ preferSetup = false } = {}) {
   const query = {};
   if (state.activePropertyId) query.propertyId = state.activePropertyId;
   const data = await api("/bootstrap", { query });
@@ -419,19 +479,14 @@ async function bootstrap() {
   if (state.round) {
     state.tasks = (await api("/rounds/today")).tasks || [];
   }
-  if (state.session?.user?.is_superadmin) {
-    try {
-      state.setupProperties = (await api("/setup/properties")).properties || [];
-    } catch {
-      state.setupProperties = [];
-    }
-  }
   if (isHousekeeperMode()) {
     state.view = "agent";
     await loadMyTasks();
+  } else {
+    await applySetupLanding({ preferSetup });
   }
   render();
-  if (!state.dashboard && !isHousekeeperMode()) {
+  if (!state.dashboard && !isHousekeeperMode() && state.view === "dashboard") {
     try {
       await refreshDashboard();
       if (state.view === "dashboard") render();
@@ -488,6 +543,11 @@ function logout() {
   state.session = null;
   state.activePropertyId = "";
   state.setupState = null;
+  state.authBusy = false;
+  state.demoPickerOpen = false;
+  state.loginEmailDraft = "";
+  state.loginPasswordDraft = "";
+  state.authMode = "login";
   render();
 }
 
@@ -505,6 +565,7 @@ function itemName(id) {
 
 function renderLogin() {
   const register = state.authMode !== "login";
+  const demoOpen = state.demoPickerOpen;
   $("#app").innerHTML = `
     <div class="login-wrap">
       <div class="login-card">
@@ -512,8 +573,12 @@ function renderLogin() {
         <h1>Masaero LINOS Hotel</h1>
         <p class="lede">Simple room linen operations for independent hotels, small resorts, and hosted properties.</p>
         <div class="auth-tabs" role="tablist" aria-label="Account access">
-          <button type="button" class="auth-tab ${register ? "active" : ""}" id="auth-register-tab">Start Free Version</button>
-          <button type="button" class="auth-tab ${register ? "" : "active"}" id="auth-login-tab">Sign in</button>
+          <button type="button" class="auth-tab ${register ? "active" : ""}" id="auth-register-tab" ${
+            state.authBusy ? "disabled" : ""
+          }>Start Free Version</button>
+          <button type="button" class="auth-tab ${register ? "" : "active"}" id="auth-login-tab" ${
+            state.authBusy ? "disabled" : ""
+          }>Sign in</button>
         </div>
         ${
           register
@@ -523,16 +588,41 @@ function renderLogin() {
                 <label>Hotel or property name <input name="hotel_name" required placeholder="Harbour View Hotel" /></label>
                 <label>Password <input name="password" type="password" minlength="8" autocomplete="new-password" required placeholder="At least 8 characters" /></label>
                 <label>Re-enter password <input name="password_confirmation" type="password" minlength="8" autocomplete="new-password" required placeholder="Type the password again" /></label>
-                <button class="btn" type="submit">Create Free Version</button>
+                <button class="btn" type="submit" ${state.authBusy ? "disabled" : ""}>${
+                  state.authBusy ? "Creating Free Version…" : "Create Free Version"
+                }</button>
                 <p class="form-hint">Create your free workspace, then configure rooms, linen, and staff after signing in.</p>
               </form>`
             : `<form id="login-form" class="stack">
-                <label>Work email <input name="email" type="email" autocomplete="email" required placeholder="you@yourhotel.com" value="muhamadyazdi@gmail.com" /></label>
-                <label>Password <input name="password" type="password" autocomplete="current-password" placeholder="Leave blank for demo accounts" /></label>
+                <label>Work email <input id="login-email" name="email" type="email" autocomplete="email" required placeholder="you@yourhotel.com" value="${escapeAttr(
+                  state.loginEmailDraft
+                )}" /></label>
+                <label>Password <input id="login-password" name="password" type="password" autocomplete="current-password" placeholder="Your password" value="${escapeAttr(
+                  state.loginPasswordDraft
+                )}" /></label>
                 <button class="btn" type="submit" ${state.authBusy ? "disabled" : ""}>${
                   state.authBusy ? "Signing in…" : "Sign in"
                 }</button>
-                <p class="form-hint">Demo superadmin: muhamadyazdi@gmail.com (password optional).</p>
+                <div class="demo-login">
+                  <button type="button" class="demo-login-toggle" id="demo-picker-toggle" ${
+                    state.authBusy ? "disabled" : ""
+                  } aria-expanded="${demoOpen ? "true" : "false"}">
+                    ${demoOpen ? "Hide demo accounts" : "Try the demo workspace"}
+                  </button>
+                  ${
+                    demoOpen
+                      ? `<div class="demo-login-panel">
+                          <p class="form-hint">Synthetic Masaero demo data. Demo accounts use a blank password.</p>
+                          <ul class="demo-login-list">
+                            ${DEMO_LOGIN_USERS.map(
+                              (u) =>
+                                `<li><button type="button" class="demo-login-user" data-demo-email="${u.email}">${u.label}<span>${u.email}</span></button></li>`
+                            ).join("")}
+                          </ul>
+                        </div>`
+                      : ""
+                  }
+                </div>
               </form>`
         }
       </div>
@@ -541,6 +631,7 @@ function renderLogin() {
   $("#auth-register-tab")?.addEventListener("click", () => {
     if (state.authBusy) return;
     state.authMode = "register";
+    state.demoPickerOpen = false;
     renderLogin();
   });
   $("#auth-login-tab")?.addEventListener("click", () => {
@@ -548,23 +639,40 @@ function renderLogin() {
     state.authMode = "login";
     renderLogin();
   });
+  $("#demo-picker-toggle")?.addEventListener("click", () => {
+    if (state.authBusy) return;
+    state.demoPickerOpen = !state.demoPickerOpen;
+    const email = $("#login-email");
+    const password = $("#login-password");
+    state.loginEmailDraft = email ? email.value : state.loginEmailDraft;
+    state.loginPasswordDraft = password ? password.value : state.loginPasswordDraft;
+    renderLogin();
+  });
+  document.querySelectorAll("[data-demo-email]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      if (state.authBusy) return;
+      state.loginEmailDraft = btn.getAttribute("data-demo-email") || "";
+      state.loginPasswordDraft = "";
+      const email = $("#login-email");
+      const password = $("#login-password");
+      if (email) email.value = state.loginEmailDraft;
+      if (password) password.value = "";
+    });
+  });
   $("#trial-form")?.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const btn = e.target.querySelector('button[type="submit"]');
+    const fd = new FormData(e.target);
+    const payload = {
+      display_name: String(fd.get("display_name") || "").trim(),
+      email: String(fd.get("email") || "").trim(),
+      hotel_name: String(fd.get("hotel_name") || "").trim(),
+      password: String(fd.get("password") || ""),
+      password_confirmation: String(fd.get("password_confirmation") || "")
+    };
     state.authBusy = true;
-    if (btn) {
-      btn.disabled = true;
-      btn.textContent = "Creating Free Version…";
-    }
+    renderLogin();
     try {
-      const fd = new FormData(e.target);
-      await registerTrial({
-        display_name: String(fd.get("display_name") || "").trim(),
-        email: String(fd.get("email") || "").trim(),
-        hotel_name: String(fd.get("hotel_name") || "").trim(),
-        password: String(fd.get("password") || ""),
-        password_confirmation: String(fd.get("password_confirmation") || "")
-      });
+      await registerTrial(payload);
     } catch (err) {
       toast(err.message, true);
       state.authBusy = false;
@@ -573,16 +681,13 @@ function renderLogin() {
   });
   $("#login-form")?.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const btn = e.target.querySelector('button[type="submit"]');
+    const fd = new FormData(e.target);
+    state.loginEmailDraft = String(fd.get("email") || "").trim();
+    state.loginPasswordDraft = String(fd.get("password") || "");
     state.authBusy = true;
-    if (btn) {
-      btn.disabled = true;
-      btn.textContent = "Signing in…";
-    }
+    renderLogin();
     try {
-      const fd = new FormData(e.target);
-      await login(String(fd.get("email") || "").trim(), String(fd.get("password") || ""));
-      state.authBusy = false;
+      await login(state.loginEmailDraft, state.loginPasswordDraft);
     } catch (err) {
       toast(err.message, true);
       state.authBusy = false;
@@ -757,6 +862,7 @@ function renderDashboard() {
       <p class="lede">Today’s room progress, verification pressure, and exception register.</p>
       ${loadingNote}
       ${propertyDisclaimer()}
+      ${dashboardSetupEmptyState()}
       <div class="grid-3" style="margin-top:1rem">
         <div class="stat"><strong>${d.progress.total || 0}</strong><span>Rooms on round</span></div>
         <div class="stat"><strong>${d.progress.verified || 0}</strong><span>Verified</span></div>
@@ -906,12 +1012,36 @@ function renderSnapshotDetail(room) {
 
 function propertyDisclaimer() {
   const p = state.session?.property;
-  if (p?.subscription_plan !== "free") return "";
+  if (!p) return "";
+  if (p.is_demo || p.demo_disclaimer) {
+    return `
+      <div class="disclaimer">
+        <strong>Demo workspace</strong> · ${p.demo_disclaimer || "Synthetic demonstration data only."}
+      </div>`;
+  }
+  if (p.subscription_plan === "free") {
+    return `
+      <div class="plan-banner">
+        <strong>Free Version</strong> · Configure your property and invite your operations team from Hotel setup.
+      </div>`;
+  }
+  return "";
+}
+
+function dashboardSetupEmptyState() {
+  if (!isSuperadmin()) return "";
+  const roomCount =
+    state.setupState?.readiness?.counts?.rooms ??
+    state.master?.rooms?.length ??
+    0;
+  const ready = state.setupState?.readiness?.ready;
+  if (ready || roomCount > 0) return "";
   return `
-    <div class="plan-banner">
-      <strong>Free Version</strong> · Configure your property and invite your operations team from Hotel setup.
-    </div>
-  `;
+    <div class="empty-setup-card">
+      <h3>Finish Hotel setup to start daily ops</h3>
+      <p class="lede">This hotel has no rooms yet. Complete Hotel setup to add rooms and housekeepers, then open the Morning board.</p>
+      <button class="btn" type="button" id="dashboard-open-setup">Continue Hotel setup</button>
+    </div>`;
 }
 
 function renderFeedback() {
@@ -2539,6 +2669,18 @@ function selectedOptions(select) {
 function bindEvents() {
   $("#logout-btn")?.addEventListener("click", logout);
 
+  $("#dashboard-open-setup")?.addEventListener("click", async () => {
+    if (!isSuperadmin()) return;
+    try {
+      await loadSetupState();
+      state.view = "hotel-setup";
+      state.setupStep = firstFailingSetupStep(state.setupState?.readiness);
+      render();
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
+
   $("#feedback-form")?.addEventListener("submit", async (e) => {
     e.preventDefault();
     try {
@@ -2572,6 +2714,13 @@ function bindEvents() {
       try {
         if (state.view === "dashboard") {
           state.dashboard = (await api("/dashboard")).dashboard;
+          if (isSuperadmin()) {
+            try {
+              await loadSetupState();
+            } catch {
+              /* empty-state CTA can fall back to master room count */
+            }
+          }
         }
         if (state.view === "round") {
           await ensureMorningRound();

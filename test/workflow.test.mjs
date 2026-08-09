@@ -47,9 +47,10 @@ test("role labels never say Station", () => {
 test("starter workspace creates hotel-native topology", () => {
   const { service } = setup();
   const session = service.session({ email: "supervisor@linos.hotel" }, "");
-  assert.equal(session.property.is_demo, false);
+  assert.equal(session.property.is_demo, true);
+  assert.equal(session.property.subscription_plan, "demo");
   assert.equal(session.property.location_model, "hotel_room_store_laundry");
-  assert.equal(session.property.demo_disclaimer, "Masaero LINOS Hotel starter workspace.");
+  assert.match(session.property.demo_disclaimer, /Synthetic demonstration workspace/i);
   assert.match(session.property.positioning, /Masaero LINOS Hotel/i);
   assert.equal(session.user.role_label, "Supervisor");
 
@@ -1015,6 +1016,10 @@ test("free version registration creates a commercial hotel workspace", () => {
   assert.equal(store.raw.users.length, 1);
   assert.equal(store.raw.room_categories.length, 4);
   assert.equal(store.raw.rooms.length, 0);
+  const readiness = service.computeSetupReadiness(result.property.id);
+  assert.equal(readiness.ready, false);
+  assert.ok(readiness.checks.some((c) => c.id === "rooms" && !c.ok));
+  assert.ok(readiness.checks.some((c) => c.id === "housekeepers" && !c.ok));
   assert.throws(
     () =>
       service.createTrialAccount({
@@ -1026,6 +1031,31 @@ test("free version registration creates a commercial hotel workspace", () => {
       }),
     /passwords do not match/i
   );
+});
+
+test("setup property list is scoped for free-version superadmins", () => {
+  const { service } = setup();
+  const trial = service.createTrialAccount({
+    display_name: "Alex Tan",
+    email: "alex@harbourview.example",
+    hotel_name: "Harbour View Hotel",
+    password: "secure-pass-123",
+    password_confirmation: "secure-pass-123"
+  });
+  const trialListed = service.listSetupProperties({
+    email: "alex@harbourview.example",
+    sub: "local:alex@harbourview.example"
+  });
+  assert.equal(trialListed.properties.length, 1);
+  assert.equal(trialListed.properties[0].id, trial.property.id);
+
+  const platformListed = service.listSetupProperties({
+    email: "muhamadyazdi@gmail.com",
+    sub: "local:muhamadyazdi@gmail.com"
+  });
+  assert.ok(platformListed.properties.length >= 2);
+  assert.ok(platformListed.properties.some((p) => p.id === trial.property.id));
+  assert.ok(platformListed.properties.some((p) => p.is_demo));
 });
 
 test("authenticated users can submit product feedback", () => {

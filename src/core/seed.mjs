@@ -7,7 +7,8 @@ import {
   sumStandardPieces
 } from "./model.mjs";
 
-export const DEMO_DISCLAIMER = "Masaero LINOS Hotel starter workspace.";
+export const DEMO_DISCLAIMER =
+  "Synthetic demonstration workspace. Room counts, floors, linen standards, and stock quantities are approximate demo data only and must not be treated as official hotel inventory.";
 
 export const PROPERTY_POSITIONING = "Hotel linen operations workspace powered by Masaero LINOS Hotel.";
 
@@ -350,6 +351,12 @@ export function seedDemoProperty(store, { bootstrapEmail = "muhamadyazdi@gmail.c
   const existing = store.find("properties", (p) => ["MASAERO-LINOS", "SP-DEMO"].includes(p.code));
   if (existing) {
     if (hotelLocationModelOk(store, existing.id)) {
+      store.update("properties", existing.id, {
+        is_demo: true,
+        demo_disclaimer: DEMO_DISCLAIMER,
+        subscription_plan: "demo",
+        subscription_status: "active"
+      });
       ensureDemoStaffRoster(store, existing.id, { bootstrapEmail });
       ensureExtraKits(store, existing.id);
       ensureInstalledInRoomBalances(store, existing.id);
@@ -364,7 +371,7 @@ export function seedDemoProperty(store, { bootstrapEmail = "muhamadyazdi@gmail.c
     code: "MASAERO-LINOS",
     name: "Masaero LINOS Hotel",
     timezone: "Asia/Kuala_Lumpur",
-    is_demo: false,
+    is_demo: true,
     demo_disclaimer: DEMO_DISCLAIMER,
     positioning: PROPERTY_POSITIONING,
     star_rating: 5,
@@ -372,6 +379,8 @@ export function seedDemoProperty(store, { bootstrapEmail = "muhamadyazdi@gmail.c
     allow_guest_pii_import: false,
     photo_retention_days: 365,
     location_model: "hotel_room_store_laundry",
+    subscription_plan: "demo",
+    subscription_status: "active",
     demo_staff_profile: DEMO_STAFF_PROFILE
   });
 

@@ -60,13 +60,15 @@ docs/                       Data dictionary, Phase 0, hospital migration
 ## Hotel setup vs Admin
 
 - **Hotel setup** (nav: Superadmin only): one-time onboarding wizard to create a hotel — profile, room types, linen catalogue, fitted standards, bulk rooms, store/staff bootstrap, readiness.
+- Incomplete Superadmins land on Hotel setup (first failing readiness step) after login; ready properties land on Dashboard.
 - **Admin** (`admin.configure`): day-to-day operational config — room grid, fitted linen per room, default floors. Supervisors use Admin after setup.
+- `/setup/properties` is scoped: Free Version Superadmins see only their own hotel. Platform operators (`LINOS_BOOTSTRAP_ADMIN_EMAILS`) can list all properties.
 
 ## Demo data
 
-Seri Pacific seed data is **synthetic / approximate** for demonstration only. Never present estimated room counts or linen quantities as official hotel data.
+The Masaero LINOS Hotel seed (`is_demo: true`, plan `demo`) is **synthetic / approximate** for demonstration only. Never present estimated room counts or linen quantities as official hotel data. UI shows the demo disclaimer; Free Version banner is for commercial free tenants only.
 
-Demo staffing: **35 housekeepers + 4 supervisors** with one initial default floor per housekeeper across floor bands (`ensureDemoStaffRoster`, profile `hk35_sv4_v2`); supervisors/admins can edit defaults later. Keep `agent1@` / `agent2@` / `supervisor@` for tests.
+Demo staffing: **35 housekeepers + 4 supervisors** with one initial default floor per housekeeper across floor bands (`ensureDemoStaffRoster`, profile `hk35_sv4_v2`); supervisors/admins can edit defaults later. Keep `agent1@` / `agent2@` / `supervisor@` for tests. Sign-in keeps commercial credentials separate from a collapsed **Try the demo workspace** picker.
 
 ## Working agreements
 

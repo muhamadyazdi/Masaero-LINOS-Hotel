@@ -2994,6 +2994,17 @@ export class HotelService {
     return access;
   }
 
+  platformOperatorEmails() {
+    return String(process.env.LINOS_BOOTSTRAP_ADMIN_EMAILS || "muhamadyazdi@gmail.com")
+      .split(",")
+      .map((email) => email.trim().toLowerCase())
+      .filter(Boolean);
+  }
+
+  isPlatformOperator(user) {
+    return this.platformOperatorEmails().includes(String(user?.email || "").toLowerCase());
+  }
+
   setupStarters() {
     return {
       ok: true,
@@ -3004,9 +3015,10 @@ export class HotelService {
   }
 
   listSetupProperties(identity) {
-    this.requireSuperadmin(identity, "");
+    const access = this.requireSuperadmin(identity, "");
+    const platform = this.isPlatformOperator(access.user);
     const properties = this.store
-      .list("properties", () => true)
+      .list("properties", (p) => platform || p.id === access.user.property_id)
       .map((p) => this.publicProperty(p))
       .sort((a, b) => String(a.name).localeCompare(String(b.name)));
     return { ok: true, properties };
