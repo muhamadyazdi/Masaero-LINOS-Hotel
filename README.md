@@ -54,6 +54,7 @@ The Seri Pacific seed is **synthetic and approximate** for demonstration only. I
 
 ## Docs
 
+- [`docs/LINOS-Hotel-User-Manual.pdf`](docs/LINOS-Hotel-User-Manual.pdf) — user manual with screenshots (rebuild: `python3 scripts/build-user-manual-pdf.py`)
 - [`docs/DATA_DICTIONARY.md`](docs/DATA_DICTIONARY.md)
 - [`docs/PHASE0_OPS_CHECKLIST.md`](docs/PHASE0_OPS_CHECKLIST.md)
 - [`docs/HOSPITAL_TO_HOTEL_MIGRATION.md`](docs/HOSPITAL_TO_HOTEL_MIGRATION.md)

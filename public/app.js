@@ -1642,6 +1642,7 @@ function renderAssign() {
     : suggestionRooms);
   const params = state.assignParams || {};
   const paramsReady = Boolean(state.assignParamsSaved);
+  const activeAgents = board.byAgent || [];
 
   return `
     <section class="panel">

@@ -86,6 +86,12 @@ const server = http.createServer(async (req, res) => {
       );
       const query = Object.fromEntries(url.searchParams.entries());
 
+      if (method === "POST" && apiPath === "/auth/register") {
+        const result = service.createTrialAccount(body);
+        sendJson(res, 200, result);
+        return;
+      }
+
       if (method === "POST" && apiPath === "/auth/local") {
         const email = String(body.email || "").trim().toLowerCase();
         if (!email) throw new LinosError(400, "ERR-AUTH-010", "Email is required.");
