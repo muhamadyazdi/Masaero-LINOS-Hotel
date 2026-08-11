@@ -1131,6 +1131,113 @@ button.linkish {
   overflow: auto;
 }
 .setup-list .muted { color: var(--muted); list-style: none; margin-left: -1.1rem; }
+.setup-master-block {
+  margin: 1.1rem 0 1.35rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--line);
+}
+.setup-master-head {
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.35rem;
+}
+.setup-master-head h4 {
+  margin: 0;
+}
+.setup-edit-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 0.4rem;
+}
+.setup-edit-table th,
+.setup-edit-table td {
+  text-align: left;
+  padding: 0.45rem 0.35rem;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+}
+.setup-edit-table input {
+  width: 100%;
+  min-width: 0;
+}
+.setup-standards-overview tr.is-selected td {
+  background: #eef6fa;
+}
+.setup-count-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0.35rem 0 0.75rem;
+  padding: 0.45rem 0.75rem;
+  border-radius: 10px;
+  background: #eef6fa;
+  border: 1px solid var(--line);
+  color: var(--ink);
+  font-size: 0.9rem;
+}
+.setup-type-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+  gap: 0.65rem;
+  margin-top: 0.65rem;
+}
+.setup-type-card {
+  display: grid;
+  gap: 0.25rem;
+  text-align: left;
+  padding: 0.75rem 0.85rem;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: #f8fbfc;
+  color: var(--ink);
+  cursor: pointer;
+}
+.setup-type-card strong { font-size: 0.98rem; }
+.setup-type-card-meta {
+  font-size: 0.78rem;
+  color: var(--muted);
+  line-height: 1.35;
+}
+.setup-type-card.is-selected {
+  border-color: var(--brand);
+  background: #eef6fa;
+  box-shadow: inset 0 0 0 1px rgba(11, 79, 108, 0.2);
+}
+.setup-type-card.is-configured:not(.is-selected) {
+  border-color: rgba(31, 122, 76, 0.35);
+}
+.setup-bed-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0.65rem 0 0.85rem;
+}
+.setup-bed-tab {
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 0.35rem 0.8rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.setup-bed-tab.is-selected {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: #fff;
+}
+.setup-rooms-table tr.is-exception td {
+  background: #fff8f2;
+}
+.setup-rooms-table tr.is-selected td {
+  background: #eef6fa;
+}
+.setup-catalogue-embed {
+  margin: 0.85rem 0 1rem;
+}
+.setup-linen-demand td:last-child {
+  font-variant-numeric: tabular-nums;
+}
 .setup-readiness {
   list-style: none;
   margin: 0.75rem 0 0;
