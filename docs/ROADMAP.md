@@ -42,6 +42,10 @@ LINOS Hotel is the operating record for room linen work: who serviced a room, wh
 - Responsive mobile testing at the operating floor viewport
 - Offline sync only after the online custody model is stable
 
+### Slice 6 — Morning briefing composer (planned)
+
+Plain-English input on the Morning Board / Today’s rooms that **fills occupancy, named-room pins, and extra-linen drafts for supervisor approval**. Parse never writes; apply uses existing round/extras APIs. Deterministic parser first; optional LLM adapter later, same JSON schema. Design: `docs/MORNING_BRIEFING.md`.
+
 ## Operating guardrails
 
 - Server capabilities remain the authorization boundary.

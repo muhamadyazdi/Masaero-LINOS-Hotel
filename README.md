@@ -38,7 +38,7 @@ See [`AGENTS.md`](AGENTS.md) for coding-agent boundaries.
 
 ## Phase 1 scope
 
-- Morning Board daily round: Supervisor manually confirms occupied rooms using the % occupancy generator (`/rounds/generate-morning`), CSV / manual / legacy rule fill, then makes the round active for assignment. Booking/PMS linkage is a future integration.
+- Morning Board daily round: Supervisor manually confirms occupied rooms using the % occupancy generator (`/rounds/generate-morning`), CSV / manual / legacy rule fill, then makes the round active for assignment. Booking/PMS linkage is a future integration. A planned plain-English **morning briefing** composer (`docs/MORNING_BRIEFING.md`) will prefill those same forms for approval.
 - Assignment floor×room grid + by-housekeeper lists (suggested minimum rooms/housekeeper is calculated from rooms ÷ available housekeepers; editable and not an absolute cap)
 - Cart load from room stock (suggest = fitted + open extras; Float / buffer column)
 - Fitted linen in/out (capped), Guest request extras / kits, exceptions, online photo evidence

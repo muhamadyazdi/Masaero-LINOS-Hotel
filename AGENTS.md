@@ -55,6 +55,7 @@ docs/                       Data dictionary, Phase 0, hospital migration
 ## Phase boundaries
 
 - **Phase 1:** room ops MVP (rounds, assignment floor grid, cart, room counts, guest request extras, verification, evidence, linen snapshot dashboard)
+- **Morning briefing (planned):** Supervisor plain-English composer on the Morning Board. Parses to a reviewable draft that prefills occupancy / extras forms. The parser is not authorization and must not post rounds, extras, or ledger rows. Design: `docs/MORNING_BRIEFING.md`.
 - **Phase 2:** room-to-store collection (backend + role-aware UI now in progress), then laundry dispatch/return UI (schema scaffolded in migration 0001)
 - Offline sync deferred; basic online photo evidence is in Phase 1
 
