@@ -32,7 +32,7 @@ Timestamps are stored in UTC and displayed in `Asia/Kuala_Lumpur` unless a prope
 
 Demo / no-PMS fill for today’s AM Draft. Defaults: **80%** occupancy, **40%** checkout of occupied, ~3% VIP, ~4% DND of stayover, ~1% no-service.
 
-Occupancy is a Supervisor-entered operating decision in the current release. The generator is a demo/no-PMS aid; a future booking/PMS connector can supply the occupied-room list.
+Occupancy is a Supervisor-entered operating decision in the current release. The generator is a demo/no-PMS aid; a future booking/PMS connector can supply the occupied-room list. A planned **morning briefing composer** (`docs/MORNING_BRIEFING.md`) turns plain English into a reviewable draft of these same fields (plus named-room pins and extra-linen requests); it does not replace supervisor approval or PMS linkage.
 
 - **Every occupied room gets a linen-change task**; checkout % only labels checkout vs stayover.
 - Vacant rooms stay off the service list.
